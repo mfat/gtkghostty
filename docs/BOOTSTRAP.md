@@ -1,5 +1,21 @@
-# Reproducible setup and dependency collection
+# Bootstrap — extraction research first
 
+This document originally documented a `libghostty-vt 1.0`-only C/GObject implementation. That build remains the **Path B fallback**, not the first development step. Read [EXTRACTION_FEASIBILITY.md](EXTRACTION_FEASIBILITY.md) first.
+
+## New Phase 0: fetch pinned Ghostty application source
+
+`sources.lock.json` now includes a `ghostty-app` pin in addition to the libghostty-vt release and reference implementations.
+
+~~~sh
+python3 tools/fetch_reference_sources.py --list
+python3 tools/fetch_reference_sources.py --only ghostty-app
+~~~
+
+Use the pinned checkout of `references/ghostty-app` to inspect/build its **GTK application frontend** on Linux. Follow that checked-out revision's own build instructions and toolchain requirements; **do not assume the `libghostty-vt 1.0.0` release build or Zig 0.17 instructions apply unchanged to the whole Ghostty app**.
+
+First run baseline Ghostty GTK; next build a separate minimal host that instantiates its real `GhosttySurface`. Capture all dependencies and project-specific modifications. **Do not vendor extracted code until the extraction GO decision and license review.**
+
+## Earlier setup: libghostty-vt-only fallback (Path B)
 ## 0. Tools
 
 - Native C compiler, Meson, Ninja, pkg-config, GTK4 development headers, GLib/GObject, Pango/PangoCairo, GObject Introspection (`g-ir-scanner`, `g-ir-compiler`), Python 3 and PyGObject for smoke tests.

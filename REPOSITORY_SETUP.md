@@ -1,30 +1,21 @@
-# Publish this repository to GitHub
+# Repository status and development bootstrap
 
-This project is prepared as a local Git repository with an initial commit. It has **not** been pushed to GitHub.
+The repository has already been created at [`mfat/gtkghostty`](https://github.com/mfat/gtkghostty). The previous repository-creation instructions are obsolete.
 
-Suggested remote name: `mfat/gtkghostty`.
+Clone the existing repository:
 
-## GitHub CLI
+~~~sh
+git clone https://github.com/mfat/gtkghostty.git
+cd gtkghostty
+~~~
 
-1. Extract the full archive preserving its `.git` directory.
-2. Install and authenticate [GitHub CLI](https://cli.github.com/): `gh auth login`.
-3. Change into the `gtkghostty` directory and run:
+Follow [README.md](README.md), [docs/ADR-0001-extraction-first.md](docs/ADR-0001-extraction-first.md), and [docs/EXTRACTION_FEASIBILITY.md](docs/EXTRACTION_FEASIBILITY.md). This is a research/documentation repository; no widget binary or tested extraction is included.
 
-```sh
-gh repo create mfat/gtkghostty --private --source=. --remote=origin --push --description "Reusable GTK4 terminal widget powered by libghostty-vt"
-```
+To fetch upstream reference snapshots, run:
 
-The command creates a **private** repository by default. Replace `--private` with `--public` only if you intend to publish it openly.
+~~~sh
+python3 tools/fetch_reference_sources.py --list
+python3 tools/fetch_reference_sources.py --only ghostty-app
+~~~
 
-If a repository already exists, do **not** run `gh repo create`; instead add its remote URL and push after checking the existing repository's branches.
-
-## GitHub web UI alternative
-
-Create an empty repository at https://github.com/new, named `gtkghostty`, **without** initializing it with README or other files. Then, from the extracted project:
-
-```sh
-git remote add origin https://github.com/mfat/gtkghostty.git
-git push -u origin main
-```
-
-Confirm the owner, repository URL, and visibility before pushing. Do not include any credentials in the repository.
+Reference checkouts remain ignored and are not vendored into this repository.

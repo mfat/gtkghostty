@@ -1,83 +1,77 @@
-# Implementation plan and work packages
+# Implementation plan — verify extraction before building a renderer
 
-Do **not** start with a full terminal emulator or packaging into SSH Pilot. Complete the sequence below as standalone, testable deliverables.
+**Current priority: Path A extraction feasibility.** This supersedes the earlier implementation ordering. Refer to [ADR 0001](ADR-0001-extraction-first.md) and [EXTRACTION_FEASIBILITY.md](EXTRACTION_FEASIBILITY.md).
 
-## Phase 0 — foundation / license gate
+## Phase 0 — baseline and extraction spike (MUST finish first)
 
-- [ ] Decide intended license **before copying other implementations**. For maximum flexibility start with original code + official MIT libghostty; treat Kwi LGPL and TildaZ AGPL source only as research until licensing decision.
-- [ ] Verify official libghostty 1.0.0 tarballs/signatures and compiler/toolchain on Linux and Windows.
-- [ ] Create minimal Meson C/GObject library and a GIR-annotated dummy `GtkWidget` subclass; import in `gi.repository` on Linux and Windows.
-- [ ] Decide and document supported GTK minimum (recommended **4.14**, to implement `GtkAccessibleText`).
-- [ ] Unit test shell-free `feed()` and frame snapshot via official C example.
+- [ ] Check out the pinned `ghostty-app` source commit and build the existing GTK frontend on supported Linux.
+- [ ] Trace every `GhosttySurface` / `GhosttyRenderSurface` / `CoreSurface` dependency and runtime initialization path (Zig, GTK, libadwaita, GResources, renderer).
+- [ ] Build a **minimal standalone GTK4 host** that embeds the actual `GhosttySurface` without Ghostty's original `Application`/`Window`.
+- [ ] Demonstrate typing, rendering, resizing, exit and cleanup. Capture build artifacts, dependency graph and crash logs.
+- [ ] Attempt caller-provided PTY byte transport; verify protocol responses and view-detach ownership.
+- [ ] Try a small public C/GObject wrapper + GIR import from PyGObject (or document exactly why impossible).
+- [ ] Profile portability blockers (DMA-BUF vs GDK backend on Windows/macOS); specify and smoke-test alternatives.
+- [ ] Record upstream-sync cost, license obligations, dependency footprint and decision evidence.
 
-**Gate:** CI builds C library + installed GIR/typelib on two OSes, Python can instantiate widget, and no copied code has unresolved license.
+**Gate:** written **GO/NO-GO** for extraction, supported by runnable Linux demo/build log and a credible cross-platform strategy. **Do not start writing a replacement renderer until this gate is resolved.**
 
-## Phase 1 — visible terminal on 2 OSes
+## Phase 1A — if extraction is GO: isolate and stabilize
 
-- [ ] Own GhosttyTerminal/RenderState and lifecycle, parser effects, consistent error paths.
-- [ ] Native GObject `TerminalView` with font metrics and whole-screen Pango/Cairo or GSK drawing.
-- [ ] Render background/foreground/palette, styles, cursor, ANSI colors, wide glyphs.
-- [ ] Correct grid resizing and clip; forward computed cols/rows and pixels to caller.
-- [ ] Repaint only when needed; test sustained text throughput against VTE baseline.
+- [ ] Package only required Ghostty GTK/core/renderer subset with documented upstream pin and patch list.
+- [ ] Remove hard requirements on global Ghostty application singleton and original window; separate config and lifetime.
+- [ ] Expose widget as embeddable GObject with explicit feed/input/resize and optional session adapter.
+- [ ] Build GIR/typelib and run standalone native and Python demos.
+- [ ] Implement tested frame transport for GTK Linux and working Windows/macOS strategy; add fallback where necessary.
+- [ ] Maintain safe callbacks, permissions, accessibility and regression tests against upstream Ghostty behavior.
 
-**Gate:** same GTK source renders static tests and a live session on Linux and Windows, including Unicode and resizing.
+**Gate:** no hidden original-app runtime; no unstable app-private symbols escape the public ABI; GUI works in an unrelated GTK process.
 
-## Phase 2 — full interactive local shell
+## Phase 1B — if extraction is NO-GO: use libghostty-vt only
 
-- [ ] `GtkEventControllerKey`, libghostty key encoding and `GtkIMContext` preedit/commit.
-- [ ] Optional POSIX PTY + Windows ConPTY process adapter with clean exit, status and signals.
-- [ ] PTY replies via `WRITE_PTY` effect; never drop query replies.
-- [ ] Focus, mouse protocols, scrollbar/scrollback, selection gestures and clipboard.
-- [ ] Safe paste, bracketed paste and multi-line paste approval hook.
-- [ ] Search and selection formatting; alternate screen and cursor styles.
+- [ ] Choose independent C/GObject + GTK4/Meson baseline and `libghostty-vt 1.0.0`.
+- [ ] Implement model ownership, effects/replies, render-state snapshots and GTK renderer.
+- [ ] Use Pango/GSK initially, then optimize measured hotspots; follow Ghostling, Forgetty, Kwi.
+- [ ] Expose GIR + native signal API; validate process-independent byte input/output and resize.
+- [ ] Preserve evidence explaining why Path A failed and which code was intentionally not ported.
 
-**Gate:** run `vim`, `nano`, `less`, `htop`/`btop`, `ssh`, and a shell; arrow keys, IME, AltGr, resize and mouse all work on Linux and Windows.
+**Gate:** Linux+Windows native GtkWidget displays VT fixtures and a local shell with no Python rendering loop.
 
-## Phase 3 — portability, hardening, usability
+## Phase 2 — input, sessions and accessibility (either path)
 
-- [ ] macOS GTK4 rendering, PTY, font and IME smoke tests on both CPU families where possible.
-- [ ] Accessibility: GtkAccessibleText + Orca; carets, lines, text changes and selections.
-- [ ] Security: title/URL sanitization; no unsolicited clipboard reads; OSC52 policy; limits on images and callbacks.
-- [ ] Kitty images, cached textures, clipping, layering and animation; progress notifications.
-- [ ] Cache unchanged rows and benchmark under high output; stress test 10+ widgets.
-- [ ] Keyboard shortcut ownership contract, session detach/re-attach and graceful shutdown.
+- [ ] GTK key mapping (including Kitty protocol, modifier sides, AltGr, function keys) and IME preedit/commit.
+- [ ] View selection, scrollback, search, clipboard with security policy, bracketed/multiline paste.
+- [ ] Optional POSIX PTY and ConPTY adapters; error propagation, EOF, cancellation, shutdown, resize.
+- [ ] Accessibility semantics with `GtkAccessibleText` where supported.
+- [ ] Mouse tracking, hyperlinks, alternate-screen behavior and title/bell/notification events.
 
-**Gate:** three-OS CI checks, platform GUI manual/automated suite, security policies documented, no regressions in input/graphics.
+**Gate:** normal shells, SSH, `vim`, `less` and `tmux` work with real keyboards and paste on Linux and Windows.
 
-## Phase 4 — independent public library
+## Phase 3 — portability and reliability
 
-- [ ] SemVer for the C/GObject public API and GIR namespace/version.
-- [ ] pkg-config, Meson subproject option, headers, GIR/typelib and Python demo.
-- [ ] Windows packaging (GTK native DLLs, Ghostty DLL), Linux distro/Flatpak packaging, macOS dylib/@rpath.
-- [ ] Examples: shell-free byte-stream viewer, local shell, SSH CLI process, embedding into an existing libadwaita app.
-- [ ] Release notes, security policy, library license notices, source-provenance manifest.
+- [ ] Windows and macOS native GTK graphical smoke, renderer/backend interop, font and scale/IME tests.
+- [ ] High-output performance, long scrollback, multiple widget instances and redraw throttling.
+- [ ] Kitty graphics as supported by chosen engine, layering, limits and fallback.
+- [ ] Reproducible builds, cross-platform CI, packaging and security review.
 
-**Gate:** third-party GTK4 app can embed the widget without linking to any SSH Pilot code.
+**Gate:** test matrix in `TEST_PLAN.md` passes or limitations are explicitly recorded.
 
-## Phase 5 — SSH Pilot integration (separate)
+## Phase 4 — public release and later SSH Pilot integration
 
-- [ ] Implement new `GtkTermKitBackend` satisfying the existing backend interface.
-- [ ] Keep VTE on Linux and existing fallback elsewhere during comparison.
-- [ ] Compare Pango/fonts, keyboard, dynamic resize, SFTP commands running in terminal, progress callbacks, SSH prompts, terminal reconnect behavior, split tabs.
-- [ ] Feature flag backend; collect controlled bug reports; migrate only when parity gates pass.
+- [ ] Versioned C/GObject API, pkg-config, headers, GIR, typelib, demos, licenses and security policy.
+- [ ] Third-party GTK4 application embeds and drives the widget without SSH Pilot dependencies.
+- [ ] Implement optional SSH Pilot backend behind feature flag. Compare with VTE/PyXtermJS and retain fallbacks until parity is demonstrated.
 
-## Suggested initial issues
+## Initial engineering issues
 
-1. `build: libghostty-vt 1.0.0 dependency + CI smoke test`
-2. `gobject: first GtkWidget subclass with GIR import on Windows/Linux`
-3. `core: terminal feed + RenderState update/clean + effects queue`
-4. `render: palette, text runs, glyph metrics and cursor`
-5. `resize: grid geometry and PTY window-size synchronization`
-6. `input: GTK key->Ghostty key mapper + fixture suite`
-7. `input: GTK IM context preedit and commit`
-8. `session: POSIX PTY adapter with cleanup`
-9. `session: Windows ConPTY adapter + Windows 10/11 tests`
-10. `interaction: selection, clipboard, scrolling, search`
-11. `a11y: GtkAccessibleText mapping and Orca acceptance`
-12. `packaging: three-platform binaries and smoke apps`
+1. `research: pin and build upstream Ghostty GTK baseline`
+2. `research: graph GhosttySurface and renderer dependencies`
+3. `spike: instantiate GhosttySurface from minimal GTK host`
+4. `spike: decouple Application.default, config and UI resources`
+5. `spike: independent stream, resize and lifecycle contract`
+6. `spike: GObject export and PyGObject introspection`
+7. `spike: test Linux render path and Windows/macOS backend feasibility`
+8. `decision: record Path A GO/NO-GO with evidence`
+9. `fallback: build libghostty-vt GTK model/renderer only if NO-GO`
+10. `quality: input, accessibility, security and cross-platform parity`
 
-## No-go criteria / contingency
-
-- If Windows GTK4 native font/IME behavior cannot reach acceptable parity without large platform-specific changes, keep the widget core and renderer reusable but postpone Windows release; retain current SSH Pilot fallback.
-- If main-thread rendering stalls under normal output, measure and implement row caching before adopting GPU APIs.
-- If the desired minimal GTK version cannot support accessible text, decide to raise it or document a clear alternate accessibility strategy; do not silently ship an inaccessible renderer.
+No implementation has been performed as part of this document update.

@@ -1,5 +1,12 @@
-# Security, licensing and release obligations
+# Security and licensing — extraction-first addendum
 
+The existing policy below continues to apply. Before copying the *Ghostty application GTK* implementation (Path A), audit the **per-file** SPDX declarations and all transitive dependencies; Ghostty's repository is MIT-licensed, but extracted files and linked components must be verified individually and notices retained. Keep a source provenance/patch list keyed to the pinned `ghostty-app` SHA.
+
+An extracted frontend uses **more than** the `libghostty-vt` ABI. It inherits Ghostty application/core/renderer integrations and their behavior, so vet effects, clipboard and URL policy at the public widget boundary and ensure no privileged actions are silently inherited from the original Ghostty application. Threaded rendering shutdown and GDK texture lifetime must also be security and reliability tests.
+
+As before, treat TildaZ's AGPL implementation as a design reference only pending a separate license review; do not silently integrate GPL/LGPL/AGPL code into a permissively licensed library.
+
+## Original security and licensing assessment
 ## Remote terminal output is untrusted
 
 The terminal can process malicious or accidental escape sequences from a remote server. libghostty-vt is fuzz-tested, but callbacks that perform side effects are **your application's responsibility**.

@@ -1,5 +1,21 @@
-# Test plan and acceptance matrix
+# Test plan — extraction-first changes
 
+The existing functional terminal test matrix below remains applicable **after** selection of extraction (A) or independent renderer (B). Before either, test the actual source-level assumptions.
+
+## Phase 0 extraction acceptance
+
+| Experiment | Required proof | Not sufficient |
+|---|---|---|
+| E0 upstream baseline | Exact pinned Ghostty GTK version builds/runs with recorded toolchain and deps | README or prior screenshot |
+| E1 standalone host | Real `GhosttySurface` instantiated outside Ghostty's original application entrypoint, drawing and accepting input | Widget class compiles in original Ghostty |
+| E2 external transport | Feed raw output and receive input/replies/resize without the widget owning a shell; reliable teardown | Shell hard-coded in core |
+| E3 public bindings | Independent GTK C host and `gi.repository` Python sample load usable widget | A Zig-only internal GObject definition |
+| E4 platform plan | Linux Wayland/X11 smoke and tested Windows/macOS render/interoperability prototypes or documented blockers | Assuming DMA-BUF works across GDK backends |
+| Maintainability | Count upstream files/patches, binary footprint and needed internal APIs | Licensing alone |
+
+**Fail-fast rule:** no claims of a distributable library or cross-platform compatibility from a Linux-only internal widget demonstration. Document GO/NO-GO against [EXTRACTION_FEASIBILITY.md](EXTRACTION_FEASIBILITY.md) before writing a replacement renderer.
+
+## Functional and quality tests (for both paths)
 ## Test levels
 
 **Unit / no GUI:** parser feed, model allocations/free, render snapshots, styles, palette, selection/search, input event encoding and effects callback queues. Use official libghostty C examples as correctness fixtures, not hand-rolled VT parsing.

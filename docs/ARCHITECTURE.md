@@ -1,109 +1,99 @@
-# Architecture and API design
+# Architecture — extraction-first, fallback retained
 
-## 1. Chosen baseline
+**Status:** Proposed target architecture. The GTK widget is *not yet extracted or implemented*.
 
-- **Implementation**: C11 (or compatible C), GTK4, GLib/GObject, Pango/PangoCairo, GDK; Meson/Ninja.
-- **VT core**: pinned `libghostty-vt 1.0.0` (C ABI stable from 1.0).
-- **Bindings**: `gnome.generate_gir()` from the very first release, producing GIR and typelib so Python uses `gi.repository` without a handcrafted Python rendering loop.
-- **Renderer v1**: native `GtkWidget` subclass with `snapshot`/GSK and Pango layout; optional Cairo-backed `GtkDrawingArea` permitted for a *throwaway* proof-of-concept. Avoid per-cell Python drawing and avoid GPU-specific APIs initially.
-- **Session**: optional module with POSIX PTY + Windows ConPTY; public widget works with **arbitrary byte streams**.
-- **Packaging**: prefer dynamically linking an installed libghostty-vt for distro builds, and reproducibly bundling a pinned native library for application builds. Verify ABI at startup.
+See [ADR 0001](ADR-0001-extraction-first.md) and [the extraction feasibility plan](EXTRACTION_FEASIBILITY.md) before implementing a new render layer.
 
-Reasoning: Ghostty does the hard VT work; GTK handles OS graphics backends, font integration and event dispatch; C/GObject is the cleanest introspection boundary for a reusable GTK4 component.
+## 1. Separate the three different Ghostty components
 
-## 2. Internal components and boundaries
+- `libghostty-vt 1.0.0`: stable C ABI; parser, terminal state, render state, encoding, effects. **Does not contain a GTK widget.**
+- `GhosttySurface`: Ghostty **application-internal** libadwaita/GObject GTK widget implemented in Zig; includes input integration and links to `CoreSurface` / default GTK application.
+- `GhosttyRenderSurface`: Ghostty **application-internal** `GtkWidget` drawing component that snapshots externally rendered DMA-BUF-backed textures; current upstream path, not the historical `Gtk.GLArea`.
 
-```text
-src/engine/         GtTerminalModel: libghostty-vt handles, effects, buffers, RenderState locking
-src/widget/         GtTerminalView: GtkWidget, size allocation, paint, cursor/scrollbar
-src/render/         Font metrics, row cache, Pango shaping, styles, images (later)
-src/input/          Gdk key mapping, libghostty key encoder, GTK IM context, pointer events
-src/a11y/           GtkAccessibleText + row/cell-to-offset mapping (requires GTK 4.14)
-src/session/        optional launcher/I/O; pt_posix.c, pt_win32.c
-include/gtktermkit/  stable public headers with gtk-doc/GIR annotations
-examples/           C example, Python/PyGObject example, standalone session demo
-tests/              core unit tests, fixture replay, GUI smoke, cross-platform test harness
-```
+## 2. Target public boundary (applies to either approach)
 
-**TerminalModel contract**
-- `feed(bytes)`: serially pass bytes into `ghostty_terminal_vt_write()`, manage effects, request repaint.
-- `snapshot_frame()`: call `ghostty_render_state_update()` then consume dirty rows and cursor, then `ghostty_render_state_clean()` after completed draw; guard producer/render-state access as documented.
-- `encode_key/encode_mouse/encode_focus/encode_paste`: delegate to libghostty, not handwritten escape sequences.
-- `resize(cols, rows)`: synchronize VT model and session adapter; send PTY window-size update to process and optionally pixel-size report.
-- `scroll`, `select`, `search`: delegate to libghostty selection and viewport APIs.
-- `process_effect`: copy borrowed callback buffers, never feed recursively, never block parser on UI dialogs. Reply requests go to transport.
+~~~text
+GTK4 / libadwaita application (C, Python via GI, other GObject language)
+                 |
+    GtkGhostty.TerminalView (GtkWidget, documented ABI/GIR)
+                 |   ^ signals: input, reply, resize, title, bell, permissions
+                 |   |
+        terminal model + native renderer
+                 ^
+                 | caller-provided byte transport
+      +----------+----------+
+      |          |          |
+  POSIX PTY    ConPTY    other streams (SSH app/custom)
+~~~
 
-**TerminalView contract**
-- Owns a reference to model but **not** necessarily the session.
-- Reports calculated cols/rows and cell pixel dimensions from allocation and Pango metrics.
-- Renders only from stable snapshot-owned state; manages animations (cursor, graphics) on GTK main context.
-- Emits byte events and signals rather than directly choosing a PTY or opening a URL.
-- Supports `GtkScrollable` or public `GtkAdjustment` (decide in prototype) to be embeddable in `GtkScrolledWindow`.
+- The **view is not the process owner**. Spawning a shell is an optional adapter; the embedding app may own SSH CLI, a serial stream or a separate PTY.
+- No hidden Ghostty default-application singleton is allowed in the public API.
+- Feed and input payloads must be binary-safe (e.g. `GBytes`); specify ownership, ordering and dispatch to GTK main context.
+- Multiple widgets/sessions must coexist in one application without global renderer/config clashes.
+- Prefer an inspectable native GObject API with GIR and typelib for PyGObject. API names below are design candidates, not compiled symbols.
 
-**Session contract**
-- Local processes use a real PTY: `forkpty`/`openpty` on POSIX; `CreatePseudoConsole`+`STARTUPINFOEX`+`PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` on Windows.
-- Bidirectional byte pipes and process lifecycle independent of the widget; no UI thread blocking.
-- SSH Pilot may launch `ssh` through the adapter; the terminal handles the *local ssh process's* PTY, not the remote server's PTY directly. Confirm SSH allocation flags and signal semantics platform by platform.
-- Detaching the view must not kill a session unless the owning app explicitly chooses that policy.
+## 3. Path A — extracted Ghostty GTK
 
-## 3. Draft C/GObject public surface (DESIGN, NOT IMPLEMENTED)
+**First attempt:** preserve Ghostty's GTK widget and renderer while splitting it into minimal reusable layers:
 
-```c
-/* Proposed names only; validate GIR annotations and ownership rules. */
-GtTerminalView *gt_terminal_view_new(void);
-void gt_terminal_view_feed(GtTerminalView *self,
-                           const guint8 *data,
-                           gsize n_bytes);
-void gt_terminal_view_set_font_desc(GtTerminalView *self,
-                                    const PangoFontDescription *font);
-void gt_terminal_view_set_scrollback_limit(GtTerminalView *self, guint lines);
-void gt_terminal_view_scroll_to_bottom(GtTerminalView *self);
-char *gt_terminal_view_dup_selection_text(GtTerminalView *self);
-/* signals: input-bytes(GBytes*), size-changed(uint cols,uint rows),
- * title-changed(string), bell(), request-open-uri(string),
- * clipboard-request(...), process-reply-bytes(GBytes*). */
-```
+~~~text
+GtkGhostty.TerminalView (thin public GObject + gtk wrapper)
+    -> extracted Ghostty GTK surface/input integration
+    -> Ghostty CoreSurface + renderer subset
+    -> caller-owned session adapter (or optional session launcher)
+~~~
 
-`GBytes` is preferable to a NUL-terminated string for binary data in GObject signals; compare `GBytes` vs `(array length=)` GIR annotations before freezing the ABI. Avoid using non-introspectable callback types in public headers. Prefer explicit ownership transfer annotations.
+This can reduce duplicate font, rendering and input work but means maintaining a Zig/GTK/renderer integration layer. Carry an explicit inventory of upstream files and build dependencies. Keep any app-only functionality (window management, tabs, menus, notifications, shortcuts) outside library core.
 
-## 4. Rendering plan
+**Critical risks:** Ghostty's `Application.default()` usage, deeply coupled `CoreSurface`, renderer thread lifecycle, GResource templates, direct DMA-BUF presentation (Linux-oriented), ABI/GIR compatibility, and upstream internal API churn.
 
-1. Use `GhosttyRenderState` as the sole source of frame information. Keep `GhosttyRenderStateRowIterator`, cells iterator and layout caches alive correctly; no reference to cell data across updates.
-2. Build native row drawing primitives: background, selected range, glyph runs, underlines, cursor, overlays.
-3. Use Pango to determine cell width/ascent/descent. Enforce monospace grid discipline; wide/zero-width clusters and font fallback require extensive tests.
-4. Start with whole-view `queue_draw`, measure. Optimize by caching unchanged row display lists or textures keyed by row generation/version. Do not assume GTK4 provides an arbitrary rectangular invalidation API for a widget.
-5. Support scale-factor changes, fractional scaling, font changes, dark/light theme, transparency (opt-in).
-6. Advance later to GSK render nodes/texture atlas if CPU layout cost or frame times warrant it; never copy Qt Scene Graph shaders directly into GSK.
+**Don't** call Path A `libghostty-vt`-only: it uses more of Ghostty than the public ABI.
 
-## 5. Input and IME plan
+## 4. Path B — standalone libghostty-vt GTK frontend
 
-- `GtkEventControllerKey` plus `GtkIMContext`/`GtkIMMulticontext` composition; wire `preedit`/`commit` and cursor location.
-- Read keyval, physical keycode, modifier side, keysym/layout and repeat status where available; map to libghostty key event enums. Note that Linux XKB, Windows and macOS need separate native validation.
-- Route keypresses to terminal unless explicitly reserved by embedding app. Default Enter/Tab always reach terminal when focused; no global app interception except documented shortcuts.
-- `GtkGestureClick`, `GtkGestureDrag`, `GtkEventControllerMotion`, `GtkEventControllerScroll` plus terminal mouse-report mode. Allow Shift or user-configured override for text selection when mouse-reporting TUIs are active.
-- Distinguish keyboard text commit from protocol key event, to avoid duplicated IME input. Focus change may generate libghostty focus event if requested by app mode.
+Only after Path A is declared unviable by the documented gate:
 
-## 6. Accessibility and threading
+~~~text
+GtkGhostty.TerminalView (native GObject)
+    -> GtkGhostty.TerminalModel (libghostty-vt 1.0 C ABI)
+    -> GTK snapshot/Pango/GSK renderer + GTK IME/accessibility
+    -> optional POSIX PTY / ConPTY or caller stream
+~~~
 
-- GTK >=4.14 for `GtkAccessibleText`; build row/cluster/offset mapping similar in concept to Kwi's `TerminalAccessible.cpp`. Test with Orca on Linux and platform-specific assistive technologies where available.
-- Begin with **single main-context ownership of the VT and renderer** for correctness. Offload only PTY reads and enqueue drained batches into GTK main context (with size limits). If profiling proves inadequate, add native model worker + brief synchronized `begin_update()/end_update()` snapshots.
-- Parser callbacks are synchronous and non-reentrant; never show a modal dialog or call `feed()` recursively in them.
+Original C11/GObject + Meson design from the earlier research remains useful *here*. Delegate VT parsing, selection/search, keyboard encoding, render state and effects to libghostty. Do not implement a parser or force Python to paint cells.
 
-## 7. Public packaging names (provisional)
+The first fallback renderer can use Pango/Cairo in a measured prototype, then row caching or GSK/GPU after benchmark evidence. The fallback has a simpler library boundary but more UI engineering.
 
-Proposed namespace `GtkTermKit-1.0`, shared library `libgtktermkit-1`, headers `<gtktermkit/terminal-view.h>`, pkg-config `gtktermkit-1.0`, Python `gi.require_version('GtkTermKit', '1.0')`. Names are placeholders, not official libghostty affiliation.
+## 5. Portable graphics policy
 
-## 8. Out of scope at first milestone
+Ghostty upstream has replaced its old `Gtk.GLArea` frame presentation with `GhosttyRenderSurface`, receiving DMA-BUF frames from the render thread via GDK textures. Do **not** assume Linux DMA-BUFs transfer directly to Windows/macOS GTK.
 
-Full GPU atlas, animated Kitty image rendering, sixel, clickable file paths, recording/replay UI, shell integration scripts, split panes and tab manager. The first widget must render **one** stream correctly and support one local process without depending on SSH Pilot internals.
+For an extracted renderer, preserve the renderer abstraction and implement/test alternate frame transport and fallback strategies per platform. Make capability detection and failure graceful. Characterize damage, scaling, font fallback, texture ownership and shutdown in each backend.
 
-## Sources
+For Path B, GTK's standard snapshot/render nodes avoid depending on Ghostty's app-specific renderer but still require robust font shaping, effects, images and dirty-frame scheduling.
 
-- https://lib.ghostty.org/vt/first-terminal.html
-- https://lib.ghostty.org/vt/guide-rendering.html
-- https://lib.ghostty.org/vt/guide-effects.html
-- https://docs.gtk.org/gtk4/class.DrawingArea.html
-- https://docs.gtk.org/gtk4/class.EventControllerKey.html
-- https://docs.gtk.org/gtk4/class.IMContext.html
-- https://docs.gtk.org/gtk4/iface.AccessibleText.html
-- https://developer.gnome.org/documentation/guidelines/programming/introspection.html
+## 6. Public API sketch (provisional)
+
+~~~c
+/* Example signatures; not implemented. Validate GIR annotations and naming. */
+GtkGhosttyTerminalView *gtk_ghostty_terminal_view_new(void);
+void gtk_ghostty_terminal_view_feed(GtkGhosttyTerminalView *self,
+                                   GBytes *output);
+void gtk_ghostty_terminal_view_set_scrollback_limit(GtkGhosttyTerminalView *self,
+                                                    guint lines);
+/* Signals: "input-bytes" (GBytes*), "reply-bytes" (GBytes*),
+   "grid-size-changed" (cols, rows, pixel_width, pixel_height),
+   "title-changed" (UTF-8), "bell", "permission-request". */
+~~~
+
+Define synchronous vs queued calls, cancellation/EOF, resize ordering, clipboard permission ownership, thread constraints and per-session effects. Do not freeze API until extraction establishes a stable implementation.
+
+## 7. Packaging and bindings
+
+- If Path A wins: document Zig requirements, vendored/extracted Ghostty internals, native shared library exports, GI generation and platform renderer dependencies. `libghostty-vt 1.0` ABI alone does not stabilize those internals.
+- If Path B wins: use Meson/C11, GTK4, Pango and pinned `libghostty-vt 1.0.0`, generate GIR with `gnome.generate_gir()`, package runtime and typelibs on each OS.
+- In both cases: maintain LGPL/MIT/other attribution notices for reused sources, a reproducible upstream pin and native smoke tests.
+
+## 8. Scope boundaries
+
+No SSH Pilot backend changes, tab manager or bespoke network protocol in this library. Do not claim performance, cross-platform support, accessibility or keyboard correctness until tested. Do not replace VTE or PyXtermJS based on a Linux-only demonstration.

@@ -1,8 +1,25 @@
-# Source map: actual reusable pieces
+# Source map — extraction-first references
 
+**Current first priority:** upstream Ghostty's existing GTK widget, *not* a new libghostty-vt renderer. See [ADR 0001](ADR-0001-extraction-first.md) and [EXTRACTION_FEASIBILITY.md](EXTRACTION_FEASIBILITY.md). Live upstream links can change; `sources.lock.json` includes a pinned `ghostty-app` revision.
+
+## Ghostty GTK widgets — first to evaluate (upstream application, MIT)
+
+| File | What to inspect |
+|---|---|
+| [`src/apprt/gtk/class/surface.zig`](https://github.com/ghostty-org/ghostty/blob/main/src/apprt/gtk/class/surface.zig) | `GhosttySurface`, `adw.Bin`/`GtkScrollable` GObject, events/IME/clipboard, `CoreSurface` ownership, singleton assumptions |
+| [`src/apprt/gtk/class/render_surface.zig`](https://github.com/ghostty-org/ghostty/blob/main/src/apprt/gtk/class/render_surface.zig) | `GhosttyRenderSurface` GTK snapshot widget, render thread, DMA-BUF presentation/GDK textures |
+| [`src/apprt/gtk/class/application.zig`](https://github.com/ghostty-org/ghostty/blob/main/src/apprt/gtk/class/application.zig) | Default GTK app, config, actions, notifications and app-only dependencies |
+| [`src/apprt/gtk/Surface.zig`](https://github.com/ghostty-org/ghostty/blob/main/src/apprt/gtk/Surface.zig) | Runtime adapter between core surface and GTK implementation |
+| [`src/Surface.zig`](https://github.com/ghostty-org/ghostty/blob/main/src/Surface.zig) | `CoreSurface` and app core responsibilities |
+| [`src/renderer.zig`](https://github.com/ghostty-org/ghostty/blob/main/src/renderer.zig) | Ghostty rendering subsystem boundary |
+| [`src/renderer/Dmabuf.zig`](https://github.com/ghostty-org/ghostty/blob/main/src/renderer/Dmabuf.zig) | DMA-BUF abstraction imported by current GTK render surface |
+
+**Observation:** the current Ghostty GTK renderer is *not* a `Gtk.GLArea` frontend. Its source explicitly says `Gtk.GLArea` was replaced by a custom widget consuming DMA-BUF render frames. That path is not proven portable to Windows/macOS GTK. **Neither `GhosttySurface` nor `GhosttyRenderSurface` is exported as part of the stable `libghostty-vt 1.0` library.** These are application internals; exporting an independent C/GObject API requires real engineering work.
+
+## Existing independent solutions — use only as needed
 Snapshot and commit pins: `../sources.lock.json` (retrieved from public GitHub branch API 2026-11-07). Paths below are verified in repository listings or fetched source. **Links show live branches**; use pinned SHAs to ensure the same code during development.
 
-## Library and official examples — integrate
+## libghostty-vt and official examples — Path B fallback
 
 | Source | Exact reference | Why |
 |---|---|---|
@@ -16,7 +33,7 @@ Snapshot and commit pins: `../sources.lock.json` (retrieved from public GitHub b
 
 **Official examples to prioritize, in this order:** `c-vt-stream`, `c-vt-render`, `c-vt-effects`, `c-vt-encode-key`, `c-vt-encode-mouse`, `c-vt-encode-focus`, `c-vt-paste`, `c-vt-selection-gesture`, `c-vt-search`, `c-vt-kitty-graphics`, `c-vt-build-info`. Follow examples index links to their actual source locations.
 
-## Forgetty — preferred GTK-specific reference (MIT)
+## Forgetty — GTK-specific Path B reference (MIT)
 
 - Repo: https://github.com/vikgmdev/forgetty
 - GTK drawing, Pango, event loops, selection, cursor and terminal integration:

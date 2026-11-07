@@ -1,53 +1,41 @@
-# Cross-platform GTK4 terminal widget powered by libghostty-vt
+# gtkghostty — reusable GTK4 terminal widget
 
-**Engineering starter kit — research snapshot: 2026-11-07**
+**Status: feasibility study and project documentation. No widget has yet been extracted, compiled, or tested.**
 
-**Status:** architecture, source inventory, reproducible reference checkout tooling, risk assessment, and milestone plan. **Not** a compiled widget. This pack deliberately does not redistribute third-party project code or vendored libraries.
+Goal: an independent GTK4 terminal component usable from native GObject applications and PyGObject, including SSH Pilot. Target platforms are Linux, Windows, and macOS. The widget must support a caller-provided terminal byte stream; launching or owning a process must remain optional.
 
-## Purpose
+## Why extraction first?
 
-Build an independent, embeddable, native GTK4 terminal widget for Linux, Windows and macOS. Expose it through a stable C/GObject API and GObject Introspection for Python/PyGObject. Integrate with SSH Pilot only after a standalone component passes platform tests.
+**Ghostty already ships a mature GTK4 widget, `GhosttySurface`.** Reimplementing its renderer and input layer before examining extraction would duplicate existing work. However, Ghostty does *not* distribute that widget as an independently supported library: it depends on Ghostty's internal `CoreSurface`, `GhosttyApplication`, renderer and configuration. The current GTK rendering path is a dedicated `GhosttyRenderSurface` that presents DMA-BUF textures, not the older `Gtk.GLArea` path.
 
-## Read in this order
+**Our first milestone is an extraction feasibility experiment, not a new renderer.** See [EXTRACTION_FEASIBILITY.md](docs/EXTRACTION_FEASIBILITY.md) and [ADR 0001](docs/ADR-0001-extraction-first.md).
 
-1. [ARCHITECTURE.md](docs/ARCHITECTURE.md) — design decision and proposed API.
-2. [SOURCE_MAP.md](docs/SOURCE_MAP.md) — exact existing pieces and which ones to reuse vs study.
-3. [BOOTSTRAP.md](docs/BOOTSTRAP.md) — official libghostty 1.0.0 setup, OS prerequisites and research reference checkout.
-4. [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) — phased work, acceptance gates and issue breakdown.
-5. [TEST_PLAN.md](docs/TEST_PLAN.md) — cross-platform tests, regressions, benchmarks.
-6. [SECURITY_AND_LICENSING.md](docs/SECURITY_AND_LICENSING.md) — terminal effects policy, I/O lifecycle, license guardrails.
-7. [sources.lock.json](sources.lock.json) — repository SHA pins verified through the public GitHub API.
+## Decision tree
 
-## Fundamental architecture
+1. **Path A — reuse/extract Ghostty's GTK frontend (preferred to investigate):** build an isolated GTK host that instantiates `GhosttySurface`, characterize its transitive dependencies, decouple global application assumptions and test an external byte-stream contract.
+2. **Decision gate:** proceed with extraction only if the resulting component can be independently packaged, embedded, introspected, maintained, and made cross-platform without effectively carrying an entire Ghostty app fork.
+3. **Path B — build a native GTK/GObject widget on libghostty-vt 1.0 (fallback):** if Path A fails the gate, adopt the original render-state design from the archived research with references to Forgetty, Kwi and Ghostling. This duplicates rendering work but gives us a narrow, stable library boundary.
+4. **SSH Pilot integration is a later, separate task:** retain its existing terminal backends until parity tests pass.
 
-```text
-App (SSH Pilot or any Gtk4 app) [Python, C, Rust, ...]
-    | GObject Introspection (GtkTermKit-1.0.typelib)
-    v
-GtkTermKit.TerminalView : GtkWidget    <-- rendering, keyboard, IME, selection, accessibility
-    |                                   <-- emits input-bytes; receives feed(output-bytes)
-    v
-GtkTermKit.TerminalModel / libghostty-vt 1.0.0  <-- VT parsing, screen, input encoding, selection, search, RenderState
-    ^
-    | independent bidirectional session adapter (optional)
-    +--- POSIX PTY (Linux / macOS)
-    +--- Windows ConPTY (Windows 10 1809+)
-    +--- caller-provided input/output transport (SSH app integration)
-```
+## Current documentation
 
-**Design invariant:** the widget never unilaterally owns a shell or SSH process. Session lifecycle is an optional adapter with an explicit owner; it must not be required just to render and interact with a terminal stream.
+- [Extraction feasibility: audited upstream files and concrete spike](docs/EXTRACTION_FEASIBILITY.md)
+- [ADR 0001: extraction-first decision](docs/ADR-0001-extraction-first.md)
+- [Architecture and public API](docs/ARCHITECTURE.md)
+- [Implementation plan and gates](docs/IMPLEMENTATION_PLAN.md)
+- [Source map](docs/SOURCE_MAP.md)
+- [Bootstrap and dependency collection](docs/BOOTSTRAP.md)
+- [Test plan](docs/TEST_PLAN.md)
+- [Security and licensing](docs/SECURITY_AND_LICENSING.md)
+- [Pinned upstream references](sources.lock.json)
+- [Original consolidated research snapshot (historical)](docs/PROJECT_BLUEPRINT.md)
 
-## First green milestone
+## Verified upstream entry points
 
-An isolated GTK4 demo runs on **Windows and Linux** with the same C widget, shows ANSI colors and Unicode from a real shell, sends input, handles resize, and is importable via `gi.repository` from Python. macOS runs before a beta release. Do not delete VTE or PyXtermJS in SSH Pilot until this passes an explicit parity suite.
+- [Ghostty GTK `GhosttySurface`](https://github.com/ghostty-org/ghostty/blob/main/src/apprt/gtk/class/surface.zig)
+- [Ghostty GTK `GhosttyRenderSurface`](https://github.com/ghostty-org/ghostty/blob/main/src/apprt/gtk/class/render_surface.zig)
+- [Ghostty core `Surface.zig`](https://github.com/ghostty-org/ghostty/blob/main/src/Surface.zig)
+- [Ghostty GTK `Application`](https://github.com/ghostty-org/ghostty/blob/main/src/apprt/gtk/class/application.zig)
+- [Official libghostty-vt](https://lib.ghostty.org/vt/)
 
-## Upstream must-read
-
-- [Libghostty 1.0 announcement (2026-11-06)](https://mitchellh.com/writing/libghostty-1-0)
-- [Official libghostty-vt installation guide](https://lib.ghostty.org/vt/installing.html)
-- [Official Your First Terminal](https://lib.ghostty.org/vt/first-terminal.html)
-- [Official Rendering guide](https://lib.ghostty.org/vt/guide-rendering.html)
-- [Official Effects guide](https://lib.ghostty.org/vt/guide-effects.html)
-- [Official examples index](https://lib.ghostty.org/vt/example-programs.html)
-
-Reference source commits are pinned separately; upstream may have changed since this snapshot.
+This is a source-level assessment only. No extraction proof, binary builds or three-platform GUI tests have been completed.

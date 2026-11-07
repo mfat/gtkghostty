@@ -1,3 +1,17 @@
+# Historical project blueprint — superseded for implementation ordering
+
+**This file is an archived, consolidated research snapshot from 2026-11-07.** It combines documents from the initial **libghostty-vt-only / new GTK renderer** plan. It has NOT been regenerated after discovery of Ghostty's existing internal GTK4 widgets. Its original proposed order, “chosen” C renderer and `Gtk.GLArea` assumptions should not be treated as current design decisions.
+
+**Current authoritative sources**:
+- [README](../README.md)
+- [ADR 0001 — extraction first](ADR-0001-extraction-first.md)
+- [Extraction feasibility and source audit](EXTRACTION_FEASIBILITY.md)
+- [Current architecture](ARCHITECTURE.md)
+- [Current implementation plan](IMPLEMENTATION_PLAN.md)
+
+The material below is retained as background and Path B research only; it is not the active delivery roadmap.
+
+---
 # GTK4 + libghostty independent widget — collected project blueprint
 
 Research snapshot: November 7, 2026. This is a collection of sources, architectural decisions, dependency instructions, and implementation gates—not working widget code.
