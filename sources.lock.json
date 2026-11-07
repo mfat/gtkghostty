@@ -1,0 +1,22 @@
+{
+  "researched_at": "2026-11-07",
+  "release": {
+    "name": "libghostty-vt",
+    "version": "1.0.0",
+    "source_url": "https://release.files.ghostty.org/libghostty-vt/1.0.0/libghostty-vt-1.0.0.tar.gz",
+    "release_index": "https://release.files.ghostty.org/libghostty-vt/1.0.0/",
+    "signature_manifest_url": "https://release.files.ghostty.org/libghostty-vt/1.0.0/SHA256SUMS.minisig",
+    "zig": "0.17",
+    "license": "MIT"
+  },
+  "references": [
+    {"slug":"ghostling","repo":"ghostty-org/ghostling","branch":"main","commit":"63842bf8e5e481160f81d348da9ff6fd27986798","license":"MIT","use":"official example"},
+    {"slug":"kwi","repo":"KDE/kwi","branch":"master","commit":"f226e487f500a955304b8c64e80d663252709b57","license":"LGPL sublibraries, GPL app; inspect individual SPDX","use":"architecture, renderer, accessibility"},
+    {"slug":"forgetty","repo":"vikgmdev/forgetty","branch":"main","commit":"e7959d27b8a2d3ed5e382bc377878db623f996b3","license":"MIT","use":"GTK4/Pango implementation"},
+    {"slug":"tildaz","repo":"ensky0/tildaz","branch":"main","commit":"5dc9eb9563c36048902d27210f85ea29ba6dbb9b","license":"AGPL-3.0-or-later","use":"platform architecture only; license restriction"},
+    {"slug":"mightty","repo":"frixaco/mightty","branch":"main","commit":"bcfccfac708c0ca83092a85d8d9599d9e47a89bf","license":"MIT stated README; inspect file notices","use":"ConPTY and Windows input"},
+    {"slug":"phantty","repo":"arya-s/phantty","branch":"main","commit":"d8b63ae6e1bca54a198c9435bf449d3a36ee2ca1","license":"not verified","use":"Windows font and renderer reference only"},
+    {"slug":"pyghostty","repo":"AnswerDotAI/pyghostty","branch":"main","commit":"6d9519c6357364708591f4726024a3c46725d2bd","license":"Apache-2.0 per GitHub","use":"optional Python binding experiment"},
+    {"slug":"ghostty-web","repo":"coder/ghostty-web","branch":"main","commit":"640db4617c69a73ccebce437cebc598c7f73cdb7","license":"MIT","use":"optional web alternative comparison"}
+  ]
+}

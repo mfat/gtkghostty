@@ -1,0 +1,9 @@
+/references/
+/libghostty-downloads/
+/build/
+*.o
+*.so
+*.dll
+*.dylib
+*.typelib
+*.gir
