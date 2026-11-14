@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later
+ * Copyright 2026 mFat <newmfat@gmail.com> and the gtkghostty contributors
+ */
 /* GtkGhosttyTerminal: a GTK4 terminal view over libghostty-vt 1.0.
  *
  * Terminal behaviour (parsing, screens, encoders, paste, formatter, effects)
@@ -1057,7 +1060,7 @@ selected_text (GtkGhosttyTerminal *self)
   ghostty_formatter_set (formatter, GHOSTTY_FORMATTER_OPT_SELECTION, &selection);
   if (ghostty_formatter_format_alloc (formatter, NULL, &ptr, &len) == GHOSTTY_SUCCESS)
     {
-      text = g_strndup ((const char *) ptr, len);
+      text = ptr != NULL ? g_strndup ((const char *) ptr, len) : g_strdup ("");
       ghostty_free (NULL, ptr, len);
     }
   ghostty_formatter_free (formatter);
@@ -1538,7 +1541,8 @@ gtk_ghostty_terminal_get_text (GtkGhosttyTerminal *self)
       ghostty_formatter_free (formatter);
       return g_strdup ("");
     }
-  text = g_strndup ((const char *) ptr, len);
+  /* Empty output comes back as a NULL buffer. */
+  text = ptr != NULL ? g_strndup ((const char *) ptr, len) : g_strdup ("");
   ghostty_free (NULL, ptr, len);
   ghostty_formatter_free (formatter);
   return text;

@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later
+ * Copyright 2026 mFat <newmfat@gmail.com> and the gtkghostty contributors
+ */
 /* GtkGhosttyTerminal: a GTK4 terminal view over libghostty-vt.
  *
  * The widget renders a terminal byte stream the caller feeds it and reports

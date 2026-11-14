@@ -101,7 +101,7 @@ technique in C (licence permits, attribute it). **Study**: design reference only
 | Caller-owned byte stream | — | — | **New** | `feed(GBytes)` in, `input`/`reply` signals out: the core API |
 | Write backpressure | tilix2 | `GLib.io_add_watch(IO_OUT)`, 488–503 | **Port** into the optional PTY adapter | — |
 | POSIX PTY | tilix2 `_start_shell`; Roost `pty.rs` | — | **Port** (tilix2) | Optional adapter, not in the widget |
-| Windows ConPTY | SSH Pilot `platform/windows/conpty.py` + `local_shell_pty.py` (verified); TildaZ (AGPL, study) | — | **Port** from SSH Pilot, if relicensed (see note) | Optional adapter |
+| Windows ConPTY | SSH Pilot `platform/windows/conpty.py` + `local_shell_pty.py` (verified); TildaZ (AGPL, study) | — | **Port** from SSH Pilot (relicensed, see note) | Optional adapter |
 
 ### Library, platform, maintenance
 
@@ -110,7 +110,7 @@ technique in C (licence permits, attribute it). **Study**: design reference only
 | GObject widget lifecycle, controllers | PrettyMux `ghostty_terminal.c` | GPL | **Study** | Original code |
 | Wrapper decomposition (render state, encoders, selection, tracked refs) | Roost `crates/roost-vt` | MIT, Rust | **Study** | Mirror the module split in C |
 | GIR / typelib | — | — | **New** | `gnome.generate_gir()` |
-| Building libghostty-vt for Windows | SSH Pilot `packaging/windows/libghostty-vt/build.py` | pinned Zig + release, offline | **Port**, if relicensed (see note) | Verified: 2.5 MB DLL importing only system DLLs, loads in python.org Python next to gvsbuild GTK |
+| Building libghostty-vt for Windows | SSH Pilot `packaging/windows/libghostty-vt/build.py` | pinned Zig + release, offline | **Port** (relicensed, see note) | Verified: 2.5 MB DLL importing only system DLLs, loads in python.org Python next to gvsbuild GTK |
 | Upstream tracking | Blueshell `UPSTREAM_SYNC.md` | — | **Study** | Only needed if we ever patch Ghostty; the stable ABI avoids that |
 | Accessibility | Ghostty GTK; Kwi `TerminalAccessible.cpp` (LGPL) | — | **Study** | `GtkAccessibleText` (GTK ≥ 4.14) from formatter text; not in tilix2 |
 
@@ -127,13 +127,9 @@ All on the same libghostty-vt 1.0.0 release; Windows numbers are a VirtualBox Wi
 | Pango relayout of a full 200×60 screen | Linux 10–13 ms; Windows 13 ms ASCII, 59 ms mixed scripts |
 | GTK on the VM | `CairoRenderer`, ~4 fps for a Python full-screen redraw: VM artefact, real Windows hardware untested |
 
-**Licence note on SSH Pilot code.** SSH Pilot is GPL-3.0. Its ConPTY adapter, build script and engine
-are cited above because they are verified on Windows, but they enter gtkghostty only as original code or
-after the copyright holder relicenses them. Code written by the SSH Pilot author can be relicensed by them;
-contributions from others need their consent. As of 2026-11-14 every commit to the four files cited
-(`platform/windows/conpty.py`, `local_shell_pty.py`, `ghostty_terminal_model.py`,
-`packaging/windows/libghostty-vt/build.py`) is by the SSH Pilot author. gtkghostty's own licence is a product decision that is still
-open (see ARCHITECTURE_DECISION.md).
+**Licence note on SSH Pilot code.** SSH Pilot is GPL-3.0. On 2026-11-15 its author, who wrote every
+commit to the files cited above, relicensed that code for gtkghostty under gtkghostty's licence,
+LGPL-2.1-or-later (recorded in `NOTICE`). Rows marked "if relicensed" can therefore be ported.
 
 ## Gaps no reference covers
 

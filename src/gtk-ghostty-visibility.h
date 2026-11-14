@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later
+ * Copyright 2026 mFat <newmfat@gmail.com> and the gtkghostty contributors
+ */
 /* Symbol visibility for the gtkghostty library. */
 #pragma once
 

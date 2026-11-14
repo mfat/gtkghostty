@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright 2026 mFat <newmfat@gmail.com> and the gtkghostty contributors
 """GtkGhosttyTerminal from Python through GObject Introspection.
 
 Run from a build directory (see tests/run.sh): needs the typelib on
@@ -168,3 +170,8 @@ def test_select_all_and_selected_text():
     assert term.get_selected_text() == "alpha\nbeta\n0123456789012345678901234"
     term.unselect_all()
     assert not term.has_selection()
+
+
+def test_an_empty_screen_reads_as_empty_text():
+    term = make()
+    assert term.get_text() == ""

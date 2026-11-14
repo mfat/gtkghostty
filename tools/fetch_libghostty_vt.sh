@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright 2026 mFat <newmfat@gmail.com> and the gtkghostty contributors
 # Downloads and verifies signed official libghostty-vt 1.0.0 release files.
 # Does NOT build the library. Requires curl, minisign, python3.
 set -eu

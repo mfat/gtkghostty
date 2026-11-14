@@ -40,6 +40,19 @@ The widget takes program output with `feed()` and emits `input`, `reply`, `size-
 selection, middle-click pastes it), reports the mouse to programs that ask (Shift selects
 anyway) and offers `copy_clipboard()`/`paste_clipboard()` for the application's own shortcuts.
 
+To run a local program, the optional `GtkGhostty.Pty` starts it on a POSIX PTY or a Windows pseudo
+console (ConPTY) and `pty.attach(terminal)` connects the two:
+
+```python
+pty = GtkGhostty.Pty.spawn(["bash"], None, None, terminal.get_columns(), terminal.get_rows())
+pty.attach(terminal)
+pty.connect("exited", lambda _pty, status: ...)
+```
+
+## Licence
+
+LGPL-2.1-or-later (see `COPYING`); attributions and ported code are listed in `NOTICE`.
+
 ## Current documentation
 
 - [ADR 0002: C widget on libghostty-vt 1.0 (current decision)](docs/ARCHITECTURE_DECISION.md)

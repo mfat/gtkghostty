@@ -65,4 +65,6 @@ GTK crashes with an access violation before any test code runs.
   Malgun Gothic is installed; CJK ideographs, kana and emoji fall back correctly. Pango's Windows
   font fallback, not the widget; needs a look at the fallback chain or a better default font.
 - The test VM renders with GTK's Cairo renderer (no GPU); real hardware is untested.
-- No PTY demo yet: the ConPTY adapter is still to come (`examples/pty_demo.py --fixture` works).
+- `GtkGhosttyPty` runs programs under ConPTY (bundled `conpty.dll` from `GTK_GHOSTTY_CONPTY_DLL`, next to
+  the program or the library, else the inbox console); `examples/pty_demo.py` runs cmd.exe. Its tests
+  pass with both the bundled and the inbox ConPTY.

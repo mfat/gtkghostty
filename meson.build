@@ -1,5 +1,9 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright 2026 mFat <newmfat@gmail.com> and the gtkghostty contributors
 project('gtkghostty', 'c',
   version: '0.1.0',
+  license: 'LGPL-2.1-or-later',
+  license_files: ['COPYING'],
   meson_version: '>= 1.0',
   default_options: ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'],
 )

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""GtkGhosttyTerminal with a program in a POSIX PTY (Linux, macOS).
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright 2026 mFat <newmfat@gmail.com> and the gtkghostty contributors
+"""GtkGhosttyTerminal running a program through GtkGhosttyPty (Linux, macOS, Windows).
 
-The widget owns no process: this demo opens the PTY, feeds the program's
-output to the widget and writes the widget's input and replies back.
+The widget owns no process; GtkGhosttyPty starts the program on a pseudo
+terminal (a POSIX PTY or a Windows pseudo console) and attach() wires the two.
 
-    examples/pty_demo.py                 # $SHELL
+    examples/pty_demo.py                 # $SHELL, or %ComSpec% on Windows
     examples/pty_demo.py htop            # any command
     examples/pty_demo.py --fixture FILE  # just render recorded bytes, no process
 """
@@ -12,14 +14,13 @@ output to the widget and writes the widget's input and replies back.
 from __future__ import annotations
 
 import os
-import struct
 import sys
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("GtkGhostty", "1")
-from gi.repository import GLib, Gtk, GtkGhostty  # noqa: E402
+from gi.repository import Gtk, GtkGhostty  # noqa: E402
 
 
 def run_fixture(term: GtkGhostty.Terminal, path: str) -> None:
@@ -27,48 +28,20 @@ def run_fixture(term: GtkGhostty.Terminal, path: str) -> None:
         term.feed_data(handle.read())
 
 
-def run_program(term: GtkGhostty.Terminal, argv: list[str], app: Gtk.Application) -> None:
-    import fcntl  # POSIX only; --fixture runs anywhere
-    import pty
-    import termios
+def default_command() -> list[str]:
+    if sys.platform == "win32":
+        return [os.environ.get("ComSpec", "cmd.exe")]
+    return [os.environ.get("SHELL", "/bin/sh")]
 
-    pid, master = pty.fork()
-    if pid == 0:  # child
-        os.environ["TERM"] = "xterm-256color"
-        os.execvp(argv[0], argv)
 
-    def write_all(data: bytes) -> None:
-        view = memoryview(data)
-        while view:
-            try:
-                written = os.write(master, view)
-            except BlockingIOError:
-                continue
-            view = view[written:]
-
-    term.connect("input", lambda _t, data: write_all(data.get_data()))
-    term.connect("reply", lambda _t, data: write_all(data.get_data()))
-
-    def resize(_t, columns, rows, cell_width, cell_height):
-        size = struct.pack("HHHH", rows, columns, columns * cell_width, rows * cell_height)
-        fcntl.ioctl(master, termios.TIOCSWINSZ, size)
-
-    term.connect("size-changed", resize)
-    resize(term, term.get_columns(), term.get_rows(), 0, 0)
-
-    def readable(fd, condition):
-        try:
-            data = os.read(fd, 65536)
-        except OSError:
-            data = b""
-        if not data:
-            app.quit()
-            return GLib.SOURCE_REMOVE
-        term.feed_data(data)
-        return GLib.SOURCE_CONTINUE
-
-    GLib.unix_fd_add_full(GLib.PRIORITY_DEFAULT, master, GLib.IOCondition.IN | GLib.IOCondition.HUP, readable)
-    term.connect("notify::title", lambda t, _p: term.get_root().set_title(t.get_title() or "gtkghostty"))
+def run_program(term: GtkGhostty.Terminal, argv: list[str], app: Gtk.Application) -> GtkGhostty.Pty:
+    env = [f"{key}={value}" for key, value in os.environ.items() if key != "TERM"]
+    env.append("TERM=xterm-256color")
+    pty = GtkGhostty.Pty.spawn(argv, env, None, term.get_columns(), term.get_rows())
+    pty.attach(term)
+    pty.connect("exited", lambda _p, _status: app.quit())
+    term.connect("notify::title", lambda t, _p: t.get_root().set_title(t.get_title() or "gtkghostty"))
+    return pty
 
 
 def main() -> None:
@@ -96,7 +69,7 @@ def main() -> None:
         if args[:1] == ["--fixture"]:
             run_fixture(term, args[1])
         else:
-            run_program(term, args or [os.environ.get("SHELL", "/bin/sh")], app)
+            app.pty = run_program(term, args or default_command(), app)  # keep it alive
 
     app.connect("activate", activate)
     app.run([])

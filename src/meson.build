@@ -1,9 +1,12 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright 2026 mFat <newmfat@gmail.com> and the gtkghostty contributors
 api_version = '1'
 
-public_headers = files('gtkghostty.h', 'gtk-ghostty-terminal.h', 'gtk-ghostty-visibility.h')
+public_headers = files('gtkghostty.h', 'gtk-ghostty-terminal.h', 'gtk-ghostty-pty.h', 'gtk-ghostty-visibility.h')
 
 sources = files(
   'gtk-ghostty-terminal.c',
+  'gtk-ghostty-pty.c',
   'gtk-ghostty-tables.c',
 )
 
@@ -25,7 +28,7 @@ gtkghostty_dep = declare_dependency(
 
 if get_option('introspection')
   gnome.generate_gir(libgtkghostty,
-    sources: public_headers + files('gtk-ghostty-terminal.c'),
+    sources: public_headers + files('gtk-ghostty-terminal.c', 'gtk-ghostty-pty.c'),
     namespace: 'GtkGhostty',
     nsversion: api_version,
     identifier_prefix: 'GtkGhostty',

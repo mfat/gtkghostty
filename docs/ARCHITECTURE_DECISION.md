@@ -39,10 +39,11 @@ Build `gtkghostty` as a **C/GObject GTK4 widget library** whose terminal core is
    measurements that demand it.
 4. **Resize and history.** Expose `pull-history-on-grow` (`OPT_RESIZE_PULL_SCROLLBACK`); ConPTY
    embedders turn it off.
-5. **Licence.** gtkghostty's licence is the owner's decision and is still open. Until it is made: only
-   MIT (libghostty-vt, Roost), WTFPL (tilix2) and Apache-2.0 (pyghostty) code may be ported, with
-   attribution; GPL/AGPL/LGPL projects (PrettyMux, TildaZ, Kwi) are design references only. SSH Pilot code
-   (GPL-3.0) enters only if its author relicenses it.
+5. **Licence.** LGPL-2.1-or-later (decided 2026-11-15), as GTK and VTE: any application can link
+   the widget, and changes to the widget stay free. MIT (libghostty-vt, Roost), WTFPL (tilix2) and
+   Apache-2.0 (pyghostty) code may be ported with attribution in `NOTICE`; GPL/AGPL projects
+   (PrettyMux, TildaZ) and Kwi's LGPL-only-v2.1/v3 modules stay design references. SSH Pilot code is
+   relicensed by its author for gtkghostty under LGPL-2.1-or-later (see `NOTICE`).
 6. **SSH Pilot integration** comes after the widget passes its parity checks on Windows; SSH Pilot keeps
    its current engines as fallbacks until then. SSH Pilot is the first consumer, not a dependency.
 
@@ -65,4 +66,3 @@ vim, less and htop work through the PTY demo on Linux; the same build runs the f
 
 - Snapshot or Cairo: decide by measurement on Linux and on real Windows hardware (the test VM has no GPU).
 - Preedit drawing and `GtkAccessibleText`: no reference covers them; design needed.
-- Library licence (rule 5).

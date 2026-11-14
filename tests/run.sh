@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright 2026 mFat <newmfat@gmail.com> and the gtkghostty contributors
 # Run the Python/GI tests against the in-tree build.
 #   tests/run.sh [build dir] [pytest args...]
 # LIBGHOSTTY_VT_LIBDIR: where libghostty-vt.so is, if not on the loader path.
