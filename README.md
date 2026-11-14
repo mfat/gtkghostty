@@ -1,10 +1,10 @@
 # gtkghostty — reusable GTK4 terminal widget
 
-**Status: feasibility study and project documentation. No widget has yet been extracted, compiled, or tested.**
+**Status: design decided, no widget code yet.** The widget will be a C/GObject GTK4 library on the public **libghostty-vt 1.0** API ([ADR 0002](docs/ARCHITECTURE_DECISION.md)); which existing project owns each feature is mapped in the [upstream feature audit](docs/UPSTREAM_FEATURE_AUDIT.md). The engine side is already proven in SSH Pilot, which runs libghostty-vt 1.0 on Windows.
 
 Goal: an independent GTK4 terminal component usable from native GObject applications and PyGObject, including SSH Pilot. Target platforms are Linux, Windows, and macOS. The widget must support a caller-provided terminal byte stream; launching or owning a process must remain optional.
 
-## Why extraction first?
+## Earlier plan: why extraction was considered first (superseded by ADR 0002)
 
 **Ghostty already ships a mature GTK4 widget, `GhosttySurface`.** Reimplementing its renderer and input layer before examining extraction would duplicate existing work. However, Ghostty does *not* distribute that widget as an independently supported library: it depends on Ghostty's internal `CoreSurface`, `GhosttyApplication`, renderer and configuration. The current GTK rendering path is a dedicated `GhosttyRenderSurface` that presents DMA-BUF textures, not the older `Gtk.GLArea` path.
 
@@ -19,8 +19,10 @@ Goal: an independent GTK4 terminal component usable from native GObject applicat
 
 ## Current documentation
 
+- [ADR 0002: C widget on libghostty-vt 1.0 (current decision)](docs/ARCHITECTURE_DECISION.md)
+- [Upstream feature audit: who already owns each feature](docs/UPSTREAM_FEATURE_AUDIT.md)
 - [Extraction feasibility: audited upstream files and concrete spike](docs/EXTRACTION_FEASIBILITY.md)
-- [ADR 0001: extraction-first decision](docs/ADR-0001-extraction-first.md)
+- [ADR 0001: extraction-first decision (superseded)](docs/ADR-0001-extraction-first.md)
 - [Architecture and public API](docs/ARCHITECTURE.md)
 - [Implementation plan and gates](docs/IMPLEMENTATION_PLAN.md)
 - [Source map](docs/SOURCE_MAP.md)

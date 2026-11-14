@@ -1,6 +1,6 @@
 # ADR 0001 — Investigate extracting Ghostty's existing GTK4 widget first
 
-- **Status:** Accepted for the *research/prototype sequence*, not a verdict that extraction will succeed.
+- **Status:** Superseded by [ADR 0002](ARCHITECTURE_DECISION.md) (2026-11-14): extraction rejected on source evidence; a C widget on libghostty-vt 1.0 chosen.
 - **Date:** 2026-11-07
 - **Scope:** Standalone gtkghostty project. No changes to SSH Pilot yet.
 
