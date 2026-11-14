@@ -114,3 +114,57 @@ def test_renders_a_frame_in_a_window():
     node = snapshot.to_node()
     assert node is not None
     window.destroy()
+
+
+def _pump(seconds=0.3):
+    context = GLib.MainContext.default()
+    deadline = GLib.get_monotonic_time() + int(seconds * 1_000_000)
+    while GLib.get_monotonic_time() < deadline:
+        context.iteration(False)
+
+
+def test_scrollback_drives_the_scrolled_window_adjustment():
+    term = make(20, 5)
+    scrolled = Gtk.ScrolledWindow()
+    scrolled.set_child(term)
+    term.set_grid_size(20, 5)
+    term.feed_data(b"".join(b"line%d\r\n" % n for n in range(100)))
+    adjustment = scrolled.get_vadjustment()
+    assert adjustment.get_upper() >= 100
+    assert adjustment.get_page_size() == 5
+    bottom = adjustment.get_value()
+    assert bottom == adjustment.get_upper() - adjustment.get_page_size()
+
+    term.scroll_lines(-10)
+    assert adjustment.get_value() == bottom - 10
+    adjustment.set_value(0)  # dragging the scrollbar moves the viewport
+    term.scroll_lines(1)
+    assert adjustment.get_value() == 1
+
+    term.paste_text("x")  # input jumps back to the prompt
+    assert adjustment.get_value() == bottom
+
+
+def test_output_keeps_a_scrolled_back_view_in_place():
+    term = make(20, 5)
+    scrolled = Gtk.ScrolledWindow()
+    scrolled.set_child(term)
+    term.set_grid_size(20, 5)
+    term.feed_data(b"".join(b"line%d\r\n" % n for n in range(50)))
+    adjustment = scrolled.get_vadjustment()
+    term.scroll_lines(-20)
+    held = adjustment.get_value()
+    term.feed_data(b"".join(b"more%d\r\n" % n for n in range(30)))
+    assert adjustment.get_value() == held
+
+
+def test_select_all_and_selected_text():
+    term = make(20, 4)
+    term.feed_data(b"alpha\r\nbeta  \r\n0123456789012345678901234")
+    assert not term.has_selection() and term.get_selected_text() is None
+    term.select_all()
+    assert term.has_selection()
+    # Soft-wrapped lines come out joined, trailing blanks trimmed.
+    assert term.get_selected_text() == "alpha\nbeta\n0123456789012345678901234"
+    term.unselect_all()
+    assert not term.has_selection()

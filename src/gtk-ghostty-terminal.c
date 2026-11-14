@@ -80,6 +80,22 @@ struct _GtkGhosttyTerminal
   gboolean legacy_keyboard;
   gboolean pull_history_on_grow;
   gboolean focused;
+
+  /* GtkScrollable: the vertical adjustment mirrors libghostty's scrollbar. */
+  GtkAdjustment *hadjustment, *vadjustment;
+  GtkScrollablePolicy hscroll_policy, vscroll_policy;
+  gboolean syncing_adjustment;
+
+  /* Pointer: mouse reports and libghostty's selection gesture. */
+  GhosttyMouseEncoder mouse_encoder;
+  GhosttyMouseEvent mouse_event;
+  GhosttySelectionGesture gesture;
+  GhosttySelectionGestureEvent gesture_press, gesture_drag, gesture_release, gesture_tick;
+  gboolean selecting;
+  guint buttons_down;           /* bit per GDK button reported to the program */
+  double pointer_x, pointer_y;
+  double scroll_remainder;
+  guint autoscroll_id;
 };
 
 enum
@@ -91,7 +107,12 @@ enum
   PROP_LEGACY_KEYBOARD,
   PROP_PULL_HISTORY_ON_GROW,
   PROP_FONT_DESC,
-  N_PROPS
+  N_PROPS,
+  /* GtkScrollable, overridden */
+  PROP_HADJUSTMENT = N_PROPS,
+  PROP_VADJUSTMENT,
+  PROP_HSCROLL_POLICY,
+  PROP_VSCROLL_POLICY,
 };
 
 enum
@@ -106,7 +127,11 @@ enum
 static GParamSpec *properties[N_PROPS];
 static guint signals[N_SIGNALS];
 
-G_DEFINE_FINAL_TYPE (GtkGhosttyTerminal, gtk_ghostty_terminal, GTK_TYPE_WIDGET)
+G_DEFINE_FINAL_TYPE_WITH_CODE (GtkGhosttyTerminal, gtk_ghostty_terminal, GTK_TYPE_WIDGET,
+                               G_IMPLEMENT_INTERFACE (GTK_TYPE_SCROLLABLE, NULL))
+
+static void update_adjustment (GtkGhosttyTerminal *self);
+static void scroll_to_bottom (GtkGhosttyTerminal *self);
 
 /* ------------------------------------------------------------------ rows */
 
@@ -280,6 +305,7 @@ apply_grid_size (GtkGhosttyTerminal *self, guint columns, guint n_rows)
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_ROWS]);
   g_signal_emit (self, signals[SIGNAL_SIZE_CHANGED], 0,
                  columns, n_rows, (guint) self->cell_width, (guint) self->cell_height);
+  update_adjustment (self);
   gtk_widget_queue_draw (GTK_WIDGET (self));
 }
 
@@ -800,6 +826,8 @@ on_key_pressed (GtkEventControllerKey *controller, guint keyval, guint keycode,
       ghostty_key_encoder_set (self->key_encoder, GHOSTTY_KEY_ENCODER_OPT_KITTY_FLAGS, &flags);
     }
   result = ghostty_key_encoder_encode (self->key_encoder, event, buf, sizeof buf, &written);
+  if (written > 0)
+    scroll_to_bottom (self);  /* typing jumps back to the prompt */
   if (result == GHOSTTY_SUCCESS)
     emit_input (self, buf, written);
   else if (result == GHOSTTY_OUT_OF_SPACE)
@@ -816,6 +844,7 @@ on_key_pressed (GtkEventControllerKey *controller, guint keyval, guint keycode,
 static void
 on_im_commit (GtkIMContext *im, const char *text, GtkGhosttyTerminal *self)
 {
+  scroll_to_bottom (self);
   emit_input (self, (const guint8 *) text, strlen (text));
 }
 
@@ -849,10 +878,451 @@ on_focus_leave (GtkEventControllerFocus *controller, GtkGhosttyTerminal *self)
   gtk_widget_queue_draw (GTK_WIDGET (self));
 }
 
+/* -------------------------------------------------------------- scrolling */
+
 static void
-on_click_pressed (GtkGestureClick *gesture, int n_press, double x, double y, GtkGhosttyTerminal *self)
+update_adjustment (GtkGhosttyTerminal *self)
 {
+  GhosttyTerminalScrollbar bar = { 0 };
+  if (self->vadjustment == NULL
+      || ghostty_terminal_get (self->terminal, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &bar) != GHOSTTY_SUCCESS)
+    return;
+  self->syncing_adjustment = TRUE;
+  gtk_adjustment_configure (self->vadjustment, (double) bar.offset, 0, (double) bar.total, 1,
+                            (double) bar.len, (double) bar.len);
+  self->syncing_adjustment = FALSE;
+}
+
+static void
+scroll_viewport (GtkGhosttyTerminal *self, GhosttyTerminalScrollViewport behavior)
+{
+  ghostty_terminal_scroll_viewport (self->terminal, behavior);
+  update_adjustment (self);
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+static void
+on_vadjustment_changed (GtkAdjustment *adjustment, GtkGhosttyTerminal *self)
+{
+  GhosttyTerminalScrollViewport behavior = { GHOSTTY_TERMINAL_SCROLL_VIEWPORT_ROW };
+  if (self->syncing_adjustment)
+    return;
+  behavior.value.row = (size_t) MAX (0.0, gtk_adjustment_get_value (adjustment) + 0.5);
+  scroll_viewport (self, behavior);
+}
+
+static void
+set_adjustment (GtkGhosttyTerminal *self, GtkAdjustment **slot, GtkAdjustment *adjustment, gboolean vertical)
+{
+  if (adjustment == NULL)
+    adjustment = gtk_adjustment_new (0, 0, 0, 0, 0, 0);
+  if (*slot == adjustment)
+    return;
+  if (*slot != NULL)
+    {
+      g_signal_handlers_disconnect_by_data (*slot, self);
+      g_object_unref (*slot);
+    }
+  *slot = g_object_ref_sink (adjustment);
+  if (vertical)
+    {
+      g_signal_connect (adjustment, "value-changed", G_CALLBACK (on_vadjustment_changed), self);
+      update_adjustment (self);
+    }
+}
+
+static gboolean
+viewport_active (GtkGhosttyTerminal *self)
+{
+  bool active = true;
+  ghostty_terminal_get (self->terminal, GHOSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE, &active);
+  return active;
+}
+
+static void
+scroll_to_bottom (GtkGhosttyTerminal *self)
+{
+  GhosttyTerminalScrollViewport behavior = { GHOSTTY_TERMINAL_SCROLL_VIEWPORT_BOTTOM };
+  if (!viewport_active (self))
+    scroll_viewport (self, behavior);
+}
+
+/* -------------------------------------------------------------- pointer */
+
+static gboolean
+mode_enabled (GtkGhosttyTerminal *self, GhosttyMode mode)
+{
+  GhosttyTerminalModeConfig config = { mode, false };
+  return ghostty_terminal_get (self->terminal, GHOSTTY_TERMINAL_DATA_MODE, &config) == GHOSTTY_SUCCESS
+         && config.value;
+}
+
+static gboolean
+reporting_mouse (GtkGhosttyTerminal *self, GdkModifierType state)
+{
+  bool tracking = false;
+  ghostty_terminal_get (self->terminal, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, &tracking);
+  /* Shift bypasses reporting so text can still be selected (xterm convention). */
+  return tracking && !(state & GDK_SHIFT_MASK);
+}
+
+static void
+viewport_cell (GtkGhosttyTerminal *self, double x, double y, guint *column, guint *row)
+{
+  *column = (guint) CLAMP (x / MAX (1, self->cell_width), 0, (double) self->columns - 1);
+  *row = (guint) CLAMP (y / MAX (1, self->cell_height), 0, (double) self->n_rows - 1);
+}
+
+static gboolean
+viewport_ref (GtkGhosttyTerminal *self, double x, double y, GhosttyGridRef *ref)
+{
+  GhosttyPoint point = { GHOSTTY_POINT_TAG_VIEWPORT };
+  guint column, row;
+  viewport_cell (self, x, y, &column, &row);
+  point.value.coordinate.x = (uint16_t) column;
+  point.value.coordinate.y = row;
+  memset (ref, 0, sizeof *ref);
+  return ghostty_terminal_grid_ref (self->terminal, point, ref) == GHOSTTY_SUCCESS;
+}
+
+static GhosttyMouseButton
+mouse_button (guint gdk_button)
+{
+  switch (gdk_button)
+    {
+    case GDK_BUTTON_PRIMARY: return GHOSTTY_MOUSE_BUTTON_LEFT;
+    case GDK_BUTTON_MIDDLE: return GHOSTTY_MOUSE_BUTTON_MIDDLE;
+    case GDK_BUTTON_SECONDARY: return GHOSTTY_MOUSE_BUTTON_RIGHT;
+    case 8: return GHOSTTY_MOUSE_BUTTON_EIGHT;
+    case 9: return GHOSTTY_MOUSE_BUTTON_NINE;
+    default: return GHOSTTY_MOUSE_BUTTON_UNKNOWN;
+    }
+}
+
+static void
+report_mouse (GtkGhosttyTerminal *self, GhosttyMouseAction action, GhosttyMouseButton button,
+              double x, double y, GdkModifierType state)
+{
+  GhosttyMouseEncoderSize size = GHOSTTY_INIT_SIZED (GhosttyMouseEncoderSize);
+  bool pressed = self->buttons_down != 0;
+  uint8_t buf[64];
+  size_t written = 0;
+
+  size.screen_width = self->columns * (uint32_t) self->cell_width;
+  size.screen_height = self->n_rows * (uint32_t) self->cell_height;
+  size.cell_width = (uint32_t) self->cell_width;
+  size.cell_height = (uint32_t) self->cell_height;
+  ghostty_mouse_encoder_set_from_terminal (self->mouse_encoder, self->terminal);
+  ghostty_mouse_encoder_set (self->mouse_encoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size);
+  ghostty_mouse_encoder_set (self->mouse_encoder, GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED, &pressed);
+
+  ghostty_mouse_event_set_action (self->mouse_event, action);
+  if (button != GHOSTTY_MOUSE_BUTTON_UNKNOWN)
+    ghostty_mouse_event_set_button (self->mouse_event, button);
+  else
+    ghostty_mouse_event_clear_button (self->mouse_event);
+  ghostty_mouse_event_set_mods (self->mouse_event, mods_from_state (state));
+  ghostty_mouse_event_set_position (self->mouse_event, (GhosttyMousePosition) { (float) x, (float) y });
+  if (ghostty_mouse_encoder_encode (self->mouse_encoder, self->mouse_event, buf, sizeof buf, &written)
+      == GHOSTTY_SUCCESS)
+    emit_input (self, buf, written);
+}
+
+static void
+set_selection (GtkGhosttyTerminal *self, const GhosttySelection *selection)
+{
+  ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_SELECTION, selection);
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+/* The selected text as Ghostty copies it: soft wraps joined, trailing blanks trimmed. */
+static char *
+selected_text (GtkGhosttyTerminal *self)
+{
+  GhosttySelection selection = { 0 };
+  GhosttyFormatter formatter = NULL;
+  GhosttyFormatterFormat emit = GHOSTTY_FORMATTER_FORMAT_PLAIN;
+  bool yes = true;
+  uint8_t *ptr = NULL;
+  size_t len = 0;
+  char *text = NULL;
+
+  if (ghostty_terminal_get (self->terminal, GHOSTTY_TERMINAL_DATA_SELECTION, &selection) != GHOSTTY_SUCCESS)
+    return NULL;
+  if (ghostty_formatter_terminal_new (NULL, &formatter, self->terminal) != GHOSTTY_SUCCESS)
+    return NULL;
+  ghostty_formatter_set (formatter, GHOSTTY_FORMATTER_OPT_EMIT, &emit);
+  ghostty_formatter_set (formatter, GHOSTTY_FORMATTER_OPT_UNWRAP, &yes);
+  ghostty_formatter_set (formatter, GHOSTTY_FORMATTER_OPT_TRIM, &yes);
+  ghostty_formatter_set (formatter, GHOSTTY_FORMATTER_OPT_SELECTION, &selection);
+  if (ghostty_formatter_format_alloc (formatter, NULL, &ptr, &len) == GHOSTTY_SUCCESS)
+    {
+      text = g_strndup ((const char *) ptr, len);
+      ghostty_free (NULL, ptr, len);
+    }
+  ghostty_formatter_free (formatter);
+  return text;
+}
+
+static void
+copy_to (GtkGhosttyTerminal *self, GdkClipboard *clipboard)
+{
+  char *text = selected_text (self);
+  if (text != NULL && text[0] != '\0')
+    gdk_clipboard_set_text (clipboard, text);
+  g_free (text);
+}
+
+static void
+on_clipboard_text (GObject *source, GAsyncResult *result, gpointer data)
+{
+  GtkGhosttyTerminal *self = data;
+  char *text = gdk_clipboard_read_text_finish (GDK_CLIPBOARD (source), result, NULL);
+  if (text != NULL)
+    {
+      gtk_ghostty_terminal_paste_text (self, text);
+      g_free (text);
+    }
+  g_object_unref (self);
+}
+
+static void
+paste_from (GtkGhosttyTerminal *self, GdkClipboard *clipboard)
+{
+  gdk_clipboard_read_text_async (clipboard, NULL, on_clipboard_text, g_object_ref (self));
+}
+
+static GhosttySelectionGestureGeometry
+gesture_geometry (GtkGhosttyTerminal *self)
+{
+  GhosttySelectionGestureGeometry geometry = { 0 };
+  geometry.columns = self->columns;
+  geometry.cell_width = (uint32_t) self->cell_width;
+  geometry.padding_left = 0;
+  geometry.screen_height = self->n_rows * (uint32_t) self->cell_height;
+  return geometry;
+}
+
+static void stop_autoscroll (GtkGhosttyTerminal *self);
+
+static gboolean
+autoscroll_tick (gpointer data)
+{
+  GtkGhosttyTerminal *self = data;
+  GhosttySelectionGestureGeometry geometry = gesture_geometry (self);
+  GhosttySurfacePosition position = { self->pointer_x, self->pointer_y };
+  GhosttyPointCoordinate cell = { 0 };
+  GhosttySelection selection = { 0 };
+  guint column, row;
+
+  viewport_cell (self, self->pointer_x, self->pointer_y, &column, &row);
+  cell.x = (uint16_t) column;
+  cell.y = row;
+  ghostty_selection_gesture_event_set (self->gesture_tick, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_VIEWPORT, &cell);
+  ghostty_selection_gesture_event_set (self->gesture_tick, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_GEOMETRY, &geometry);
+  ghostty_selection_gesture_event_set (self->gesture_tick, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_POSITION, &position);
+  if (ghostty_selection_gesture_event (self->gesture, self->terminal, self->gesture_tick, &selection)
+      != GHOSTTY_SUCCESS)
+    {
+      self->autoscroll_id = 0;  /* the gesture cancelled itself */
+      return G_SOURCE_REMOVE;
+    }
+  set_selection (self, &selection);
+  update_adjustment (self);
+  return G_SOURCE_CONTINUE;
+}
+
+static void
+stop_autoscroll (GtkGhosttyTerminal *self)
+{
+  g_clear_handle_id (&self->autoscroll_id, g_source_remove);
+}
+
+static void
+on_pressed (GtkGestureClick *click, int n_press, double x, double y, GtkGhosttyTerminal *self)
+{
+  GdkEvent *event = gtk_event_controller_get_current_event (GTK_EVENT_CONTROLLER (click));
+  GdkModifierType state = gtk_event_controller_get_current_event_state (GTK_EVENT_CONTROLLER (click));
+  guint button = gtk_gesture_single_get_current_button (GTK_GESTURE_SINGLE (click));
+
   gtk_widget_grab_focus (GTK_WIDGET (self));
+  self->pointer_x = x;
+  self->pointer_y = y;
+
+  if (reporting_mouse (self, state))
+    {
+      GhosttyMouseButton ghostty_button = mouse_button (button);
+      if (ghostty_button != GHOSTTY_MOUSE_BUTTON_UNKNOWN)
+        {
+          self->buttons_down |= 1u << button;
+          report_mouse (self, GHOSTTY_MOUSE_ACTION_PRESS, ghostty_button, x, y, state);
+        }
+      return;
+    }
+
+  if (button == GDK_BUTTON_PRIMARY)
+    {
+      GhosttyGridRef ref;
+      GhosttySurfacePosition position = { x, y };
+      uint64_t time_ns = event != NULL ? (uint64_t) gdk_event_get_time (event) * 1000000u : 0;
+      GhosttySelection selection = { 0 };
+      if (!viewport_ref (self, x, y, &ref))
+        return;
+      ghostty_selection_gesture_event_set (self->gesture_press, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_REF, &ref);
+      ghostty_selection_gesture_event_set (self->gesture_press, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_POSITION, &position);
+      if (time_ns != 0)
+        {
+          /* Repeat clicks (word, line) follow the desktop's double-click
+           * settings; libghostty has no defaults for them. */
+          GtkSettings *settings = gtk_widget_get_settings (GTK_WIDGET (self));
+          int interval_ms = 400, distance = 5;
+          uint64_t interval_ns;
+          double max_distance;
+          g_object_get (settings, "gtk-double-click-time", &interval_ms,
+                        "gtk-double-click-distance", &distance, NULL);
+          interval_ns = (uint64_t) MAX (1, interval_ms) * 1000000u;
+          max_distance = MAX (1, distance);
+          ghostty_selection_gesture_event_set (self->gesture_press, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_TIME_NS, &time_ns);
+          ghostty_selection_gesture_event_set (self->gesture_press,
+                                               GHOSTTY_SELECTION_GESTURE_EVENT_OPT_REPEAT_INTERVAL_NS, &interval_ns);
+          ghostty_selection_gesture_event_set (self->gesture_press,
+                                               GHOSTTY_SELECTION_GESTURE_EVENT_OPT_REPEAT_DISTANCE, &max_distance);
+        }
+      self->selecting = TRUE;
+      /* A single press only anchors; double and triple clicks select word and line. */
+      if (ghostty_selection_gesture_event (self->gesture, self->terminal, self->gesture_press, &selection)
+          == GHOSTTY_SUCCESS)
+        set_selection (self, &selection);
+      else
+        set_selection (self, NULL);
+    }
+  else if (button == GDK_BUTTON_MIDDLE)
+    paste_from (self, gtk_widget_get_primary_clipboard (GTK_WIDGET (self)));
+}
+
+static void
+on_released (GtkGestureClick *click, int n_press, double x, double y, GtkGhosttyTerminal *self)
+{
+  GdkModifierType state = gtk_event_controller_get_current_event_state (GTK_EVENT_CONTROLLER (click));
+  guint button = gtk_gesture_single_get_current_button (GTK_GESTURE_SINGLE (click));
+
+  if (self->buttons_down & (1u << button))
+    {
+      self->buttons_down &= ~(1u << button);
+      report_mouse (self, GHOSTTY_MOUSE_ACTION_RELEASE, mouse_button (button), x, y, state);
+      return;
+    }
+  if (button == GDK_BUTTON_PRIMARY && self->selecting)
+    {
+      GhosttyGridRef ref;
+      self->selecting = FALSE;
+      stop_autoscroll (self);
+      if (viewport_ref (self, x, y, &ref))
+        ghostty_selection_gesture_event_set (self->gesture_release, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_REF, &ref);
+      ghostty_selection_gesture_event (self->gesture, self->terminal, self->gesture_release, NULL);
+      copy_to (self, gtk_widget_get_primary_clipboard (GTK_WIDGET (self)));
+    }
+}
+
+static void
+on_motion (GtkEventControllerMotion *motion, double x, double y, GtkGhosttyTerminal *self)
+{
+  GdkModifierType state = gtk_event_controller_get_current_event_state (GTK_EVENT_CONTROLLER (motion));
+  self->pointer_x = x;
+  self->pointer_y = y;
+
+  if (self->selecting)
+    {
+      GhosttyGridRef ref;
+      GhosttySurfacePosition position = { x, y };
+      GhosttySelectionGestureGeometry geometry = gesture_geometry (self);
+      GhosttySelection selection = { 0 };
+      GhosttySelectionGestureAutoscroll autoscroll = GHOSTTY_SELECTION_GESTURE_AUTOSCROLL_NONE;
+      if (!viewport_ref (self, x, y, &ref))
+        return;
+      ghostty_selection_gesture_event_set (self->gesture_drag, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_REF, &ref);
+      ghostty_selection_gesture_event_set (self->gesture_drag, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_POSITION, &position);
+      ghostty_selection_gesture_event_set (self->gesture_drag, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_GEOMETRY, &geometry);
+      if (ghostty_selection_gesture_event (self->gesture, self->terminal, self->gesture_drag, &selection)
+          == GHOSTTY_SUCCESS)
+        set_selection (self, &selection);
+      ghostty_selection_gesture_get (self->gesture, self->terminal, GHOSTTY_SELECTION_GESTURE_DATA_AUTOSCROLL,
+                                     &autoscroll);
+      if (autoscroll != GHOSTTY_SELECTION_GESTURE_AUTOSCROLL_NONE && self->autoscroll_id == 0)
+        self->autoscroll_id = g_timeout_add (15, autoscroll_tick, self);
+      else if (autoscroll == GHOSTTY_SELECTION_GESTURE_AUTOSCROLL_NONE)
+        stop_autoscroll (self);
+      return;
+    }
+  /* Motion reports: the encoder drops what the program's tracking mode does not want. */
+  if (reporting_mouse (self, state))
+    {
+      GhosttyMouseButton held = GHOSTTY_MOUSE_BUTTON_UNKNOWN;
+      for (guint b = 1; b <= 9 && held == GHOSTTY_MOUSE_BUTTON_UNKNOWN; b++)
+        if (self->buttons_down & (1u << b))
+          held = mouse_button (b);
+      report_mouse (self, GHOSTTY_MOUSE_ACTION_MOTION, held, x, y, state);
+    }
+}
+
+static void
+send_key (GtkGhosttyTerminal *self, GhosttyKey key)
+{
+  GhosttyKeyEvent event = NULL;
+  uint8_t buf[16];
+  size_t written = 0;
+  if (ghostty_key_event_new (NULL, &event) != GHOSTTY_SUCCESS)
+    return;
+  ghostty_key_event_set_action (event, GHOSTTY_KEY_ACTION_PRESS);
+  ghostty_key_event_set_key (event, key);
+  ghostty_key_encoder_set_from_terminal (self->key_encoder, self->terminal);
+  if (self->legacy_keyboard)
+    {
+      GhosttyKittyKeyFlags flags = GHOSTTY_KITTY_KEY_DISABLED;
+      ghostty_key_encoder_set (self->key_encoder, GHOSTTY_KEY_ENCODER_OPT_KITTY_FLAGS, &flags);
+    }
+  if (ghostty_key_encoder_encode (self->key_encoder, event, buf, sizeof buf, &written) == GHOSTTY_SUCCESS)
+    emit_input (self, buf, written);
+  ghostty_key_event_free (event);
+}
+
+static gboolean
+on_scroll (GtkEventControllerScroll *controller, double dx, double dy, GtkGhosttyTerminal *self)
+{
+  GdkModifierType state = gtk_event_controller_get_current_event_state (GTK_EVENT_CONTROLLER (controller));
+  GdkScrollUnit unit = gtk_event_controller_scroll_get_unit (controller);
+  double rows = unit == GDK_SCROLL_UNIT_WHEEL ? dy * 3 : dy / MAX (1, self->cell_height);
+  int steps;
+
+  self->scroll_remainder += rows;
+  steps = (int) self->scroll_remainder;
+  if (steps == 0)
+    return GDK_EVENT_STOP;
+  self->scroll_remainder -= steps;
+
+  if (reporting_mouse (self, state))
+    {
+      GhosttyMouseButton wheel = steps < 0 ? GHOSTTY_MOUSE_BUTTON_FOUR : GHOSTTY_MOUSE_BUTTON_FIVE;
+      for (int i = 0; i < ABS (steps); i++)
+        report_mouse (self, GHOSTTY_MOUSE_ACTION_PRESS, wheel, self->pointer_x, self->pointer_y, state);
+      return GDK_EVENT_STOP;
+    }
+  if (mode_enabled (self, GHOSTTY_MODE_ALT_SCREEN_SAVE_CURSOR_CLEAR_ENTER)
+      || mode_enabled (self, GHOSTTY_MODE_ALT_SCREEN) || mode_enabled (self, GHOSTTY_MODE_ALT_SCREEN_LEGACY))
+    {
+      /* No history on the alternate screen: with mode 1007 the wheel becomes
+       * arrow keys for the pager or editor. */
+      if (mode_enabled (self, GHOSTTY_MODE_MOUSE_ALTERNATE_SCROLL))
+        for (int i = 0; i < ABS (steps); i++)
+          send_key (self, steps < 0 ? GHOSTTY_KEY_ARROW_UP : GHOSTTY_KEY_ARROW_DOWN);
+      return GDK_EVENT_STOP;
+    }
+  {
+    GhosttyTerminalScrollViewport behavior = { GHOSTTY_TERMINAL_SCROLL_VIEWPORT_DELTA };
+    behavior.value.delta = steps;
+    scroll_viewport (self, behavior);
+  }
+  return GDK_EVENT_STOP;
 }
 
 /* ------------------------------------------------------------ public API */
@@ -885,6 +1355,7 @@ gtk_ghostty_terminal_feed_data (GtkGhosttyTerminal *self, const guint8 *data, gs
     return;
   ghostty_terminal_vt_write (self->terminal, data, length);
   flush_effects (self);
+  update_adjustment (self);
   gtk_widget_queue_draw (GTK_WIDGET (self));
 }
 
@@ -935,7 +1406,10 @@ gtk_ghostty_terminal_paste_text (GtkGhosttyTerminal *self, const char *text)
     }
   buf = g_malloc (needed);
   if (ghostty_paste_encode (copy, length, mode.value, buf, needed, &needed) == GHOSTTY_SUCCESS)
-    emit_input (self, buf, needed);
+    {
+      scroll_to_bottom (self);
+      emit_input (self, buf, needed);
+    }
   g_free (buf);
   g_free (copy);
 }
@@ -952,6 +1426,94 @@ gtk_ghostty_terminal_paste_is_safe (const char *text)
 {
   g_return_val_if_fail (text != NULL, TRUE);
   return ghostty_paste_is_safe (text, strlen (text));
+}
+
+/**
+ * gtk_ghostty_terminal_get_selected_text:
+ * @self: the terminal
+ *
+ * Returns: (transfer full) (nullable): the selection as Ghostty copies it
+ *   (soft-wrapped lines joined, trailing blanks trimmed), or %NULL
+ */
+char *
+gtk_ghostty_terminal_get_selected_text (GtkGhosttyTerminal *self)
+{
+  g_return_val_if_fail (GTK_GHOSTTY_IS_TERMINAL (self), NULL);
+  return selected_text (self);
+}
+
+gboolean
+gtk_ghostty_terminal_has_selection (GtkGhosttyTerminal *self)
+{
+  GhosttySelection selection = { 0 };
+  g_return_val_if_fail (GTK_GHOSTTY_IS_TERMINAL (self), FALSE);
+  return ghostty_terminal_get (self->terminal, GHOSTTY_TERMINAL_DATA_SELECTION, &selection) == GHOSTTY_SUCCESS;
+}
+
+void
+gtk_ghostty_terminal_select_all (GtkGhosttyTerminal *self)
+{
+  GhosttySelection selection = { 0 };
+  g_return_if_fail (GTK_GHOSTTY_IS_TERMINAL (self));
+  if (ghostty_terminal_select_all (self->terminal, &selection) == GHOSTTY_SUCCESS)
+    set_selection (self, &selection);
+}
+
+void
+gtk_ghostty_terminal_unselect_all (GtkGhosttyTerminal *self)
+{
+  g_return_if_fail (GTK_GHOSTTY_IS_TERMINAL (self));
+  set_selection (self, NULL);
+}
+
+/**
+ * gtk_ghostty_terminal_copy_clipboard:
+ * @self: the terminal
+ *
+ * Copies the selection to the clipboard. Bind it to a shortcut of your
+ * choice (Ctrl+Shift+C is common); the widget binds none.
+ */
+void
+gtk_ghostty_terminal_copy_clipboard (GtkGhosttyTerminal *self)
+{
+  g_return_if_fail (GTK_GHOSTTY_IS_TERMINAL (self));
+  copy_to (self, gtk_widget_get_clipboard (GTK_WIDGET (self)));
+}
+
+/**
+ * gtk_ghostty_terminal_paste_clipboard:
+ * @self: the terminal
+ *
+ * Reads the clipboard and pastes it as gtk_ghostty_terminal_paste_text()
+ * does, without asking about unsafe text: check
+ * gtk_ghostty_terminal_paste_is_safe() first if you want to confirm.
+ */
+void
+gtk_ghostty_terminal_paste_clipboard (GtkGhosttyTerminal *self)
+{
+  g_return_if_fail (GTK_GHOSTTY_IS_TERMINAL (self));
+  paste_from (self, gtk_widget_get_clipboard (GTK_WIDGET (self)));
+}
+
+/**
+ * gtk_ghostty_terminal_scroll_lines:
+ * @self: the terminal
+ * @lines: rows to scroll, negative towards older output
+ */
+void
+gtk_ghostty_terminal_scroll_lines (GtkGhosttyTerminal *self, int lines)
+{
+  GhosttyTerminalScrollViewport behavior = { GHOSTTY_TERMINAL_SCROLL_VIEWPORT_DELTA };
+  g_return_if_fail (GTK_GHOSTTY_IS_TERMINAL (self));
+  behavior.value.delta = lines;
+  scroll_viewport (self, behavior);
+}
+
+void
+gtk_ghostty_terminal_scroll_to_bottom (GtkGhosttyTerminal *self)
+{
+  g_return_if_fail (GTK_GHOSTTY_IS_TERMINAL (self));
+  scroll_to_bottom (self);
 }
 
 /**
@@ -1117,6 +1679,10 @@ gtk_ghostty_terminal_get_property (GObject *object, guint prop_id, GValue *value
     case PROP_LEGACY_KEYBOARD: g_value_set_boolean (value, self->legacy_keyboard); break;
     case PROP_PULL_HISTORY_ON_GROW: g_value_set_boolean (value, self->pull_history_on_grow); break;
     case PROP_FONT_DESC: g_value_take_boxed (value, pango_font_description_copy (self->font)); break;
+    case PROP_HADJUSTMENT: g_value_set_object (value, self->hadjustment); break;
+    case PROP_VADJUSTMENT: g_value_set_object (value, self->vadjustment); break;
+    case PROP_HSCROLL_POLICY: g_value_set_enum (value, self->hscroll_policy); break;
+    case PROP_VSCROLL_POLICY: g_value_set_enum (value, self->vscroll_policy); break;
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
     }
 }
@@ -1132,6 +1698,10 @@ gtk_ghostty_terminal_set_property (GObject *object, guint prop_id, const GValue 
       gtk_ghostty_terminal_set_pull_history_on_grow (self, g_value_get_boolean (value));
       break;
     case PROP_FONT_DESC: gtk_ghostty_terminal_set_font_desc (self, g_value_get_boxed (value)); break;
+    case PROP_HADJUSTMENT: set_adjustment (self, &self->hadjustment, g_value_get_object (value), FALSE); break;
+    case PROP_VADJUSTMENT: set_adjustment (self, &self->vadjustment, g_value_get_object (value), TRUE); break;
+    case PROP_HSCROLL_POLICY: self->hscroll_policy = g_value_get_enum (value); break;
+    case PROP_VSCROLL_POLICY: self->vscroll_policy = g_value_get_enum (value); break;
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
     }
 }
@@ -1159,6 +1729,11 @@ gtk_ghostty_terminal_dispose (GObject *object)
   if (self->im != NULL)
     gtk_im_context_set_client_widget (self->im, NULL);
   g_clear_object (&self->im);
+  stop_autoscroll (self);
+  if (self->vadjustment != NULL)
+    g_signal_handlers_disconnect_by_data (self->vadjustment, self);
+  g_clear_object (&self->vadjustment);
+  g_clear_object (&self->hadjustment);
   G_OBJECT_CLASS (gtk_ghostty_terminal_parent_class)->dispose (object);
 }
 
@@ -1171,6 +1746,13 @@ gtk_ghostty_terminal_finalize (GObject *object)
   ghostty_render_state_row_iterator_free (self->rows);
   ghostty_render_state_free (self->render_state);
   ghostty_key_encoder_free (self->key_encoder);
+  ghostty_mouse_event_free (self->mouse_event);
+  ghostty_mouse_encoder_free (self->mouse_encoder);
+  ghostty_selection_gesture_event_free (self->gesture_press);
+  ghostty_selection_gesture_event_free (self->gesture_drag);
+  ghostty_selection_gesture_event_free (self->gesture_release);
+  ghostty_selection_gesture_event_free (self->gesture_tick);
+  ghostty_selection_gesture_free (self->gesture, self->terminal);
   ghostty_terminal_free (self->terminal);
   g_byte_array_unref (self->pending_reply);
   g_free (self->title);
@@ -1214,6 +1796,10 @@ gtk_ghostty_terminal_class_init (GtkGhosttyTerminalClass *klass)
     g_param_spec_boxed ("font-desc", NULL, NULL, PANGO_TYPE_FONT_DESCRIPTION,
                         G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
   g_object_class_install_properties (object_class, N_PROPS, properties);
+  g_object_class_override_property (object_class, PROP_HADJUSTMENT, "hadjustment");
+  g_object_class_override_property (object_class, PROP_VADJUSTMENT, "vadjustment");
+  g_object_class_override_property (object_class, PROP_HSCROLL_POLICY, "hscroll-policy");
+  g_object_class_override_property (object_class, PROP_VSCROLL_POLICY, "vscroll-policy");
 
   /**
    * GtkGhosttyTerminal::input:
@@ -1259,7 +1845,7 @@ gtk_ghostty_terminal_class_init (GtkGhosttyTerminalClass *klass)
 static void
 gtk_ghostty_terminal_init (GtkGhosttyTerminal *self)
 {
-  GtkEventController *keys, *focus;
+  GtkEventController *keys, *focus, *motion, *scroll;
   GtkGesture *click;
   size_t max_bytes = SIZE_MAX, max_lines = DEFAULT_SCROLLBACK_LINES;
 
@@ -1276,6 +1862,13 @@ gtk_ghostty_terminal_init (GtkGhosttyTerminal *self)
   ghostty_render_state_row_iterator_new (NULL, &self->rows);
   ghostty_render_state_row_cells_new (NULL, &self->cells);
   ghostty_key_encoder_new (NULL, &self->key_encoder);
+  ghostty_mouse_encoder_new (NULL, &self->mouse_encoder);
+  ghostty_mouse_event_new (NULL, &self->mouse_event);
+  ghostty_selection_gesture_new (NULL, &self->gesture);
+  ghostty_selection_gesture_event_new (NULL, &self->gesture_press, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_PRESS);
+  ghostty_selection_gesture_event_new (NULL, &self->gesture_drag, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_DRAG);
+  ghostty_selection_gesture_event_new (NULL, &self->gesture_release, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_RELEASE);
+  ghostty_selection_gesture_event_new (NULL, &self->gesture_tick, GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_AUTOSCROLL_TICK);
 
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_USERDATA, self);
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY, (const void *) on_write_pty);
@@ -1304,6 +1897,18 @@ gtk_ghostty_terminal_init (GtkGhosttyTerminal *self)
   gtk_widget_add_controller (GTK_WIDGET (self), focus);
 
   click = gtk_gesture_click_new ();
-  g_signal_connect (click, "pressed", G_CALLBACK (on_click_pressed), self);
+  gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (click), 0);  /* every button */
+  g_signal_connect (click, "pressed", G_CALLBACK (on_pressed), self);
+  g_signal_connect (click, "released", G_CALLBACK (on_released), self);
   gtk_widget_add_controller (GTK_WIDGET (self), GTK_EVENT_CONTROLLER (click));
+
+  motion = gtk_event_controller_motion_new ();
+  g_signal_connect (motion, "motion", G_CALLBACK (on_motion), self);
+  gtk_widget_add_controller (GTK_WIDGET (self), motion);
+
+  scroll = gtk_event_controller_scroll_new (GTK_EVENT_CONTROLLER_SCROLL_VERTICAL);
+  g_signal_connect (scroll, "scroll", G_CALLBACK (on_scroll), self);
+  gtk_widget_add_controller (GTK_WIDGET (self), scroll);
+
+  gtk_widget_set_cursor_from_name (GTK_WIDGET (self), "text");
 }

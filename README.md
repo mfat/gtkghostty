@@ -34,7 +34,11 @@ Windows (MSVC + gvsbuild GTK): see [docs/WINDOWS.md](docs/WINDOWS.md).
 
 From Python: `gi.require_version("GtkGhostty", "1"); from gi.repository import GtkGhostty`.
 The widget takes program output with `feed()` and emits `input`, `reply`, `size-changed`,
-`bell` and `notify::title`; it never starts a process.
+`bell` and `notify::title`; it never starts a process. It is a `GtkScrollable` (put it in a
+`GtkScrolledWindow` for a scrollbar over the history), selects with libghostty's gesture rules
+(drag, double-click word, triple-click line, edge autoscroll; the selection goes to the primary
+selection, middle-click pastes it), reports the mouse to programs that ask (Shift selects
+anyway) and offers `copy_clipboard()`/`paste_clipboard()` for the application's own shortcuts.
 
 ## Current documentation
 

@@ -37,6 +37,25 @@ GTK_GHOSTTY_API
 char       *gtk_ghostty_terminal_get_text           (GtkGhosttyTerminal         *self);
 
 GTK_GHOSTTY_API
+char       *gtk_ghostty_terminal_get_selected_text  (GtkGhosttyTerminal         *self);
+GTK_GHOSTTY_API
+gboolean    gtk_ghostty_terminal_has_selection      (GtkGhosttyTerminal         *self);
+GTK_GHOSTTY_API
+void        gtk_ghostty_terminal_select_all         (GtkGhosttyTerminal         *self);
+GTK_GHOSTTY_API
+void        gtk_ghostty_terminal_unselect_all       (GtkGhosttyTerminal         *self);
+GTK_GHOSTTY_API
+void        gtk_ghostty_terminal_copy_clipboard     (GtkGhosttyTerminal         *self);
+GTK_GHOSTTY_API
+void        gtk_ghostty_terminal_paste_clipboard    (GtkGhosttyTerminal         *self);
+
+GTK_GHOSTTY_API
+void        gtk_ghostty_terminal_scroll_lines       (GtkGhosttyTerminal         *self,
+                                                     int                         lines);
+GTK_GHOSTTY_API
+void        gtk_ghostty_terminal_scroll_to_bottom   (GtkGhosttyTerminal         *self);
+
+GTK_GHOSTTY_API
 guint       gtk_ghostty_terminal_get_columns        (GtkGhosttyTerminal         *self);
 GTK_GHOSTTY_API
 guint       gtk_ghostty_terminal_get_rows           (GtkGhosttyTerminal         *self);

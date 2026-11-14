@@ -79,7 +79,18 @@ def main() -> None:
         window = Gtk.ApplicationWindow(application=app, title="gtkghostty")
         window.set_default_size(900, 560)
         term = GtkGhostty.Terminal()
-        window.set_child(term)
+        scrolled = Gtk.ScrolledWindow()  # GtkScrollable: the scrollbar follows the history
+        scrolled.set_child(term)
+        window.set_child(scrolled)
+        # The widget binds no shortcuts; an application picks its own.
+        shortcuts = Gtk.ShortcutController(scope=Gtk.ShortcutScope.MANAGED)
+        shortcuts.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        for accel, method in (("<Control><Shift>c", term.copy_clipboard),
+                              ("<Control><Shift>v", term.paste_clipboard)):
+            shortcuts.add_shortcut(Gtk.Shortcut.new(
+                Gtk.ShortcutTrigger.parse_string(accel),
+                Gtk.CallbackAction.new(lambda *_a, m=method: (m(), True)[1])))
+        window.add_controller(shortcuts)
         window.present()
         term.grab_focus()
         if args[:1] == ["--fixture"]:
