@@ -7,3 +7,7 @@
 *.dylib
 *.typelib
 *.gir
+/_build/
+/_deps/
+__pycache__/
+.pytest_cache/

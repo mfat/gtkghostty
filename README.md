@@ -17,6 +17,23 @@ Goal: an independent GTK4 terminal component usable from native GObject applicat
 3. **Path B — build a native GTK/GObject widget on libghostty-vt 1.0 (fallback):** if Path A fails the gate, adopt the original render-state design from the archived research with references to Forgetty, Kwi and Ghostling. This duplicates rendering work but gives us a narrow, stable library boundary.
 4. **SSH Pilot integration is a later, separate task:** retain its existing terminal backends until parity tests pass.
 
+## Building (first milestone)
+
+Needs GTK ≥ 4.14, Meson, a C compiler, GObject Introspection and libghostty-vt 1.0
+(build it from the official release with Zig 0.17, see [BOOTSTRAP.md](docs/BOOTSTRAP.md)).
+
+```sh
+PKG_CONFIG_PATH=/path/to/libghostty-vt/lib/pkgconfig meson setup _build
+ninja -C _build
+LIBGHOSTTY_VT_LIBDIR=/path/to/libghostty-vt/lib xvfb-run -a tests/run.sh _build
+GI_TYPELIB_PATH=_build/src LD_LIBRARY_PATH=_build/src:/path/to/libghostty-vt/lib \
+  python3 examples/pty_demo.py htop          # or --fixture tests/fixtures/showcase.vt
+```
+
+From Python: `gi.require_version("GtkGhostty", "1"); from gi.repository import GtkGhostty`.
+The widget takes program output with `feed()` and emits `input`, `reply`, `size-changed`,
+`bell` and `notify::title`; it never starts a process.
+
 ## Current documentation
 
 - [ADR 0002: C widget on libghostty-vt 1.0 (current decision)](docs/ARCHITECTURE_DECISION.md)
