@@ -153,7 +153,7 @@ on_write_pty (GhosttyTerminal terminal, void *userdata, const uint8_t *data, siz
 {
   GtkGhosttyTerminal *self = userdata;
   /* Never re-enter the terminal from a callback: queue, emit after the write. */
-  g_byte_array_append (self->pending_reply, data, len);
+  g_byte_array_append (self->pending_reply, data, (guint) len);
 }
 
 static void
@@ -343,7 +343,7 @@ close_run (GtkGhosttyTerminal *self, Row *row, PendingRun *run)
     return;
   layout = pango_layout_new (gtk_widget_get_pango_context (GTK_WIDGET (self)));
   pango_layout_set_font_description (layout, self->fonts[run->bold][run->italic]);
-  pango_layout_set_text (layout, run->text->str, run->text->len);
+  pango_layout_set_text (layout, run->text->str, (int) run->text->len);
   if (!run->wide)
     pango_layout_set_attributes (layout, self->grid_attrs);
   out.x = run->x;
@@ -497,11 +497,11 @@ build_row (GtkGhosttyTerminal *self, const GdkRGBA *fg_default, const GdkRGBA *b
 }
 
 static void
-append_rect (GtkSnapshot *snapshot, const GdkRGBA *color, float x, float y, float w, float h)
+append_rect (GtkSnapshot *snapshot, const GdkRGBA *color, double x, double y, double w, double h)
 {
   if (w <= 0 || h <= 0)
     return;
-  gtk_snapshot_append_color (snapshot, color, &GRAPHENE_RECT_INIT (x, y, w, h));
+  gtk_snapshot_append_color (snapshot, color, &GRAPHENE_RECT_INIT ((float) x, (float) y, (float) w, (float) h));
 }
 
 static void
@@ -519,8 +519,8 @@ draw_box (GtkSnapshot *snapshot, const GtkGhosttyBoxGlyph *glyph, const GdkRGBA 
       for (int i = 0; i < glyph->n_rects; i++)
         {
           const float *r = glyph->rects[i];
-          int x1 = x + (int) (r[0] * w + 0.5f), y1 = y + (int) (r[1] * h + 0.5f);
-          int x2 = x + (int) ((r[0] + r[2]) * w + 0.5f), y2 = y + (int) ((r[1] + r[3]) * h + 0.5f);
+          int x1 = x + (int) (r[0] * (float) w + 0.5f), y1 = y + (int) (r[1] * (float) h + 0.5f);
+          int x2 = x + (int) ((r[0] + r[2]) * (float) w + 0.5f), y2 = y + (int) ((r[1] + r[3]) * (float) h + 0.5f);
           append_rect (snapshot, color, x1, y1, x2 - x1, y2 - y1);
         }
     }
@@ -531,12 +531,12 @@ draw_box (GtkSnapshot *snapshot, const GtkGhosttyBoxGlyph *glyph, const GdkRGBA 
       if (glyph->arc)
         {
           /* ╭╮╯╰: a quarter curve from the vertical edge to the horizontal one. */
-          float px = cx + (light % 2) / 2.f, py = cy + (light % 2) / 2.f;
+          float px = (float) cx + (float) (light % 2) / 2.f, py = (float) cy + (float) (light % 2) / 2.f;
           GskPathBuilder *builder = gsk_path_builder_new ();
-          GskStroke *stroke = gsk_stroke_new (light);
+          GskStroke *stroke = gsk_stroke_new ((float) light);
           GskPath *path;
-          gsk_path_builder_move_to (builder, px, glyph->arms[3] ? y + h : y);
-          gsk_path_builder_cubic_to (builder, px, py, px, py, glyph->arms[1] ? x + w : x, py);
+          gsk_path_builder_move_to (builder, px, (float) (glyph->arms[3] ? y + h : y));
+          gsk_path_builder_cubic_to (builder, px, py, px, py, (float) (glyph->arms[1] ? x + w : x), py);
           path = gsk_path_builder_free_to_path (builder);
           gtk_snapshot_append_stroke (snapshot, path, stroke, color);
           gsk_path_unref (path);
@@ -562,10 +562,10 @@ draw_box (GtkSnapshot *snapshot, const GtkGhosttyBoxGlyph *glyph, const GdkRGBA 
 }
 
 static void
-draw_layout (GtkSnapshot *snapshot, PangoLayout *layout, const GdkRGBA *color, float x, float y, float scale)
+draw_layout (GtkSnapshot *snapshot, PangoLayout *layout, const GdkRGBA *color, double x, double y, float scale)
 {
   gtk_snapshot_save (snapshot);
-  gtk_snapshot_translate (snapshot, &GRAPHENE_POINT_INIT (x, y));
+  gtk_snapshot_translate (snapshot, &GRAPHENE_POINT_INIT ((float) x, (float) y));
   if (scale > 0)
     gtk_snapshot_scale (snapshot, scale, 1);
   gtk_snapshot_append_layout (snapshot, layout, color);
@@ -663,35 +663,38 @@ gtk_ghostty_terminal_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
     g_ptr_array_set_size (self->row_cache, y);
   ghostty_render_state_clean (self->render_state);
 
-  append_rect (snapshot, &bg, 0, 0, gtk_widget_get_width (widget), gtk_widget_get_height (widget));
+  append_rect (snapshot, &bg, 0, 0, (float) gtk_widget_get_width (widget), (float) gtk_widget_get_height (widget));
 
   for (y = 0; y < self->row_cache->len; y++)
     {
       Row *row = g_ptr_array_index (self->row_cache, y);
+      float top = (float) y * ch;
       for (guint i = 0; i < row->bgs->len; i++)
         {
           Span *span = &g_array_index (row->bgs, Span, i);
-          append_rect (snapshot, &span->color, span->x * cw, y * ch, span->n * cw, ch);
+          append_rect (snapshot, &span->color, (float) (span->x * cw), top, (float) (span->n * cw), (float) ch);
         }
     }
   for (y = 0; y < self->row_cache->len; y++)
     {
       Row *row = g_ptr_array_index (self->row_cache, y);
+      float top = (float) y * ch;
       for (guint i = 0; i < row->boxes->len; i++)
         {
           BoxCell *box = &g_array_index (row->boxes, BoxCell, i);
-          draw_box (snapshot, gtk_ghostty_box_glyph (box->c), &box->fg, box->x * cw, y * ch, cw, ch);
+          draw_box (snapshot, gtk_ghostty_box_glyph (box->c), &box->fg, box->x * cw, (int) y * ch, cw, ch);
         }
       for (guint i = 0; i < row->runs->len; i++)
         {
           Run *run = &g_array_index (row->runs, Run, i);
-          draw_layout (snapshot, run->layout, &run->fg, run->x * cw, y * ch, run->scale);
+          float left = (float) (run->x * cw), width = (float) (run->n * cw);
+          draw_layout (snapshot, run->layout, &run->fg, left, top, run->scale);
           if (run->underline)
-            append_rect (snapshot, &run->fg, run->x * cw, y * ch + self->ascent + 2, run->n * cw, 1);
+            append_rect (snapshot, &run->fg, left, top + (float) (self->ascent + 2), width, 1);
           if (run->strike)
-            append_rect (snapshot, &run->fg, run->x * cw, y * ch + ch / 2, run->n * cw, 1);
+            append_rect (snapshot, &run->fg, left, top + (float) (ch / 2), width, 1);
           if (run->overline)
-            append_rect (snapshot, &run->fg, run->x * cw, y * ch + 1, run->n * cw, 1);
+            append_rect (snapshot, &run->fg, left, top + 1, width, 1);
         }
     }
   draw_cursor (self, snapshot, &colors, &fg, &bg);
@@ -801,9 +804,10 @@ on_key_pressed (GtkEventControllerKey *controller, guint keyval, guint keycode,
     emit_input (self, buf, written);
   else if (result == GHOSTTY_OUT_OF_SPACE)
     {
-      g_autofree uint8_t *big = g_malloc (written);
+      uint8_t *big = g_malloc (written);
       if (ghostty_key_encoder_encode (self->key_encoder, event, big, written, &written) == GHOSTTY_SUCCESS)
         emit_input (self, big, written);
+      g_free (big);
     }
   ghostty_key_event_free (event);
   return TRUE;
@@ -913,8 +917,8 @@ void
 gtk_ghostty_terminal_paste_text (GtkGhosttyTerminal *self, const char *text)
 {
   GhosttyTerminalModeConfig mode = { ghostty_mode_new (2004, false), false };
-  g_autofree char *copy = NULL;
-  g_autofree uint8_t *buf = NULL;
+  char *copy;
+  uint8_t *buf;
   size_t length, needed = 0;
 
   g_return_if_fail (GTK_GHOSTTY_IS_TERMINAL (self));
@@ -925,10 +929,15 @@ gtk_ghostty_terminal_paste_text (GtkGhosttyTerminal *self, const char *text)
   ghostty_terminal_get (self->terminal, GHOSTTY_TERMINAL_DATA_MODE, &mode);
   copy = g_memdup2 (text, length);  /* encoded in place */
   if (ghostty_paste_encode (copy, length, mode.value, NULL, 0, &needed) != GHOSTTY_OUT_OF_SPACE)
-    return;
+    {
+      g_free (copy);
+      return;
+    }
   buf = g_malloc (needed);
   if (ghostty_paste_encode (copy, length, mode.value, buf, needed, &needed) == GHOSTTY_SUCCESS)
     emit_input (self, buf, needed);
+  g_free (buf);
+  g_free (copy);
 }
 
 /**
@@ -1128,6 +1137,22 @@ gtk_ghostty_terminal_set_property (GObject *object, guint prop_id, const GValue 
 }
 
 static void
+gtk_ghostty_terminal_realize (GtkWidget *widget)
+{
+  GtkGhosttyTerminal *self = GTK_GHOSTTY_TERMINAL (widget);
+  GTK_WIDGET_CLASS (gtk_ghostty_terminal_parent_class)->realize (widget);
+  gtk_im_context_set_client_widget (self->im, widget);
+}
+
+static void
+gtk_ghostty_terminal_unrealize (GtkWidget *widget)
+{
+  GtkGhosttyTerminal *self = GTK_GHOSTTY_TERMINAL (widget);
+  gtk_im_context_set_client_widget (self->im, NULL);
+  GTK_WIDGET_CLASS (gtk_ghostty_terminal_parent_class)->unrealize (widget);
+}
+
+static void
 gtk_ghostty_terminal_dispose (GObject *object)
 {
   GtkGhosttyTerminal *self = GTK_GHOSTTY_TERMINAL (object);
@@ -1170,6 +1195,8 @@ gtk_ghostty_terminal_class_init (GtkGhosttyTerminalClass *klass)
   widget_class->measure = gtk_ghostty_terminal_measure;
   widget_class->size_allocate = gtk_ghostty_terminal_size_allocate;
   widget_class->snapshot = gtk_ghostty_terminal_snapshot;
+  widget_class->realize = gtk_ghostty_terminal_realize;
+  widget_class->unrealize = gtk_ghostty_terminal_unrealize;
 
   properties[PROP_COLUMNS] = g_param_spec_uint ("columns", NULL, NULL, 0, G_MAXUINT16, DEFAULT_COLUMNS,
                                                 G_PARAM_READABLE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
@@ -1261,8 +1288,9 @@ gtk_ghostty_terminal_init (GtkGhosttyTerminal *self)
 
   gtk_widget_set_focusable (GTK_WIDGET (self), TRUE);
 
+  /* The client widget is set on realize: the Windows IME module asks for the
+   * widget's native surface, which does not exist before then. */
   self->im = gtk_im_multicontext_new ();
-  gtk_im_context_set_client_widget (self->im, GTK_WIDGET (self));
   g_signal_connect (self->im, "commit", G_CALLBACK (on_im_commit), self);
 
   keys = gtk_event_controller_key_new ();

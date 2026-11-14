@@ -9,9 +9,9 @@ gnome = import('gnome')
 gtk = dependency('gtk4', version: '>= 4.14')
 libghostty_vt = dependency('libghostty-vt', version: '>= 1.0.0')
 
+cc = meson.get_compiler('c')
 add_project_arguments(
-  '-Wno-unused-parameter',
-  '-Wno-missing-field-initializers',
+  cc.get_supported_arguments('-Wno-unused-parameter', '-Wno-missing-field-initializers'),
   language: 'c',
 )
 

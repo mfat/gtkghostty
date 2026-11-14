@@ -1,6 +1,6 @@
 api_version = '1'
 
-public_headers = files('gtkghostty.h', 'gtk-ghostty-terminal.h')
+public_headers = files('gtkghostty.h', 'gtk-ghostty-terminal.h', 'gtk-ghostty-visibility.h')
 
 sources = files(
   'gtk-ghostty-terminal.c',
@@ -10,8 +10,8 @@ sources = files(
 libgtkghostty = shared_library('gtkghostty-' + api_version,
   sources,
   dependencies: [gtk, libghostty_vt],
-  c_args: ['-DG_LOG_DOMAIN="GtkGhostty"'],
-  gnu_symbol_visibility: 'default',
+  c_args: ['-DG_LOG_DOMAIN="GtkGhostty"', '-DGTK_GHOSTTY_COMPILATION'],
+  gnu_symbol_visibility: 'hidden',
   install: true,
 )
 

@@ -30,6 +30,8 @@ GI_TYPELIB_PATH=_build/src LD_LIBRARY_PATH=_build/src:/path/to/libghostty-vt/lib
   python3 examples/pty_demo.py htop          # or --fixture tests/fixtures/showcase.vt
 ```
 
+Windows (MSVC + gvsbuild GTK): see [docs/WINDOWS.md](docs/WINDOWS.md).
+
 From Python: `gi.require_version("GtkGhostty", "1"); from gi.repository import GtkGhostty`.
 The widget takes program output with `feed()` and emits `input`, `reply`, `size-changed`,
 `bell` and `notify::title`; it never starts a process.

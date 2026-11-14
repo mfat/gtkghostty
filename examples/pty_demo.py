@@ -11,12 +11,9 @@ output to the widget and writes the widget's input and replies back.
 
 from __future__ import annotations
 
-import fcntl
 import os
-import pty
 import struct
 import sys
-import termios
 
 import gi
 
@@ -31,6 +28,10 @@ def run_fixture(term: GtkGhostty.Terminal, path: str) -> None:
 
 
 def run_program(term: GtkGhostty.Terminal, argv: list[str], app: Gtk.Application) -> None:
+    import fcntl  # POSIX only; --fixture runs anywhere
+    import pty
+    import termios
+
     pid, master = pty.fork()
     if pid == 0:  # child
         os.environ["TERM"] = "xterm-256color"
