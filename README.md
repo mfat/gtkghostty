@@ -46,7 +46,25 @@ prefix, or put its `bin` on `PATH` and its typelib directory on `GI_TYPELIB_PATH
 `packaging/windows/build-gvsbuild.ps1` builds the zip; [docs/WINDOWS.md](docs/WINDOWS.md)
 covers building by hand.
 
-From Python: `gi.require_version("GtkGhostty", "1"); from gi.repository import GtkGhostty`.
+### Python
+
+`gi.require_version("GtkGhostty", "1"); from gi.repository import GtkGhostty`. Two
+examples show the two ways to drive the widget:
+
+- `examples/pty_demo.py`: a local program on a pseudo terminal (`GtkGhostty.Pty`,
+  POSIX or Windows ConPTY).
+- `examples/ssh_demo.py`: a stream the widget does not own, here an SSH channel
+  (paramiko). The same wiring fits a serial port, a socket or a container stream:
+  output into `feed_data()`, `input` and `reply` back out, `size-changed` to the
+  far end.
+
+Type stubs for editors and type checkers are in `stubs/gi-stubs/repository/GtkGhostty.pyi`,
+generated from the GIR (`tools/gen_stubs.py`). They extend
+[pygobject-stubs](https://pypi.org/project/pygobject-stubs/): copy the file into its
+`gi-stubs/repository` directory in your environment. Signals get typed `connect()`
+overloads, nullable values are `Optional`, and out arguments come back as tuples, as
+PyGObject returns them.
+
 The widget takes program output with `feed()` and emits `input`, `reply`, `size-changed`,
 `bell` and `notify::title`; it never starts a process. It is a `GtkScrollable` (put it in a
 `GtkScrolledWindow` for a scrollbar over the history), selects with libghostty's gesture rules
