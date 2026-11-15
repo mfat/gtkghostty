@@ -13,7 +13,8 @@ sources = files(
 libgtkghostty = shared_library('gtkghostty-' + api_version,
   sources,
   dependencies: [gtk, libghostty_vt],
-  c_args: ['-DG_LOG_DOMAIN="GtkGhostty"', '-DGTK_GHOSTTY_COMPILATION'],
+  c_args: ['-DG_LOG_DOMAIN="GtkGhostty"', '-DGTK_GHOSTTY_COMPILATION',
+           '-DGTK_GHOSTTY_VERSION="@0@"'.format(meson.project_version())],
   gnu_symbol_visibility: 'hidden',
   install: true,
 )

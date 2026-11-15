@@ -16,6 +16,7 @@ glue that is genuinely left. "Verified" means run and observed, not read; everyt
 | [tilix2](https://github.com/markuman/tilix2) | `65d775b` | WTFPL v2 | One-file GTK4 terminal (1471 lines) on pyghostty, Cairo/Pango | No (pyghostty's bundled library is an unverified binary; not loaded) |
 | [pyghostty](https://pypi.org/project/pyghostty/) | 0.1.4 wheel | Apache-2.0 | cffi binding over a bundled `libghostty-vt` | Inspected only |
 | [PrettyMux](https://github.com/patcito/prettymux) | `137915d` | GPL-3.0-only | C/GObject `GtkWidget` around Ghostty's internal `ghostty_surface_t` | No |
+| [Ghostling](https://github.com/ghostty-org/ghostling) | `63842bf` | MIT | Ghostty's own minimal libghostty-vt terminal in one C file (Raylib) | No; read only. Pinned to a pre-1.0 Ghostty commit (`f64f4ac`), so function names differ from 1.0 (`*_setopt_from_terminal`) |
 | [Roost](https://github.com/charliek/roost) | `e49d9d2d` | MIT | Rust/iced terminal, `roost-vt` wrapper over libghostty-vt | No |
 | [Blueshell](https://github.com/tuna-os/blueshell) | `0234dde6e` (ptyxis-port) | MIT core, GPL agent | Fork of the Ghostty GTK application | No |
 
@@ -64,7 +65,8 @@ technique in C (licence permits, attribute it). **Study**: design reference only
 | Paste safety, bracketed paste | libghostty-vt | `ghostty_paste_encode`, `ghostty_paste_is_safe` | **Use** | Confirmation UI belongs to the embedder |
 | Hyperlinks (OSC 8) | libghostty-vt | `ghostty_grid_ref_hyperlink_uri` | **Use** | Pointer → screen point; scheme policy on activation |
 | Plain-text URL detection | — | — | **New** | Small regex over row text (libghostty has none); SSH Pilot's `url_at` pattern |
-| Kitty graphics | libghostty-vt | `ghostty_kitty_graphics_*`, placement render info | **Use** | Texture cache per image id + generation; tilix2 `_images` |
+| Kitty graphics | libghostty-vt | `ghostty_kitty_graphics_*`, placement render info; PNG via `ghostty_sys_set(DECODE_PNG)` (Ghostling, tilix2) | **Use** | Texture cache per image id + generation; tilix2 `_images`. Keep the file / temp-file / shared-memory media **off by default**: Ghostling enables them, but over SSH they let a remote program make the terminal read local files |
+| Size, version, colour-scheme queries | libghostty-vt | `OPT_SIZE`, `OPT_XTVERSION`, `OPT_COLOR_SCHEME` (all registered by Ghostling) | **Use** | Done: cell size from the widget, scheme from the background's luminance |
 | Scroll counting for a pinned scrolled-back view | libghostty-vt | tracked grid ref at the active top | **Use** | Exact per write; lost (has_value false) when a single write prunes its page — then the viewed rows are gone too (verified) |
 
 ### Drawing (GTK)

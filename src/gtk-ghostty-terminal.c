@@ -18,7 +18,16 @@
 #include <stdint.h>
 #include <string.h>
 
-#define DEFAULT_FONT "Monospace 11"
+#ifdef G_OS_WIN32
+# define DEFAULT_FONT "Cascadia Mono, Consolas, Courier New 11"
+/* Pango on Windows falls back only along its built-in alias lists: "Monospace"
+ * has no Korean font, and a named family (Consolas) has no fallback at all,
+ * so Hangul, CJK and emoji showed as hex boxes. Every font gets these
+ * standard Windows families appended, in order. */
+# define FALLBACK_FAMILIES "Malgun Gothic,Microsoft YaHei,Yu Gothic,Segoe UI Emoji,Segoe UI Symbol"
+#else
+# define DEFAULT_FONT "Monospace 11"
+#endif
 #define DEFAULT_COLUMNS 80
 #define DEFAULT_ROWS 24
 #define DEFAULT_SCROLLBACK_LINES 10000
@@ -202,6 +211,39 @@ on_device_attributes (GhosttyTerminal terminal, void *userdata, GhosttyDeviceAtt
   return false;  /* the library's default attributes */
 }
 
+/* XTWINOPS size reports (CSI 14/16/18 t) and mode 2048: image tools size
+ * their pictures from the cell size. */
+static bool
+on_size (GhosttyTerminal terminal, void *userdata, GhosttySizeReportSize *out)
+{
+  GtkGhosttyTerminal *self = userdata;
+  out->rows = (uint16_t) self->n_rows;
+  out->columns = (uint16_t) self->columns;
+  out->cell_width = (uint32_t) MAX (1, self->cell_width);
+  out->cell_height = (uint32_t) MAX (1, self->cell_height);
+  return true;
+}
+
+/* XTVERSION (CSI > q). */
+static GhosttyString
+on_xtversion (GhosttyTerminal terminal, void *userdata)
+{
+  static const char version[] = "gtkghostty " GTK_GHOSTTY_VERSION;
+  return (GhosttyString) { (const uint8_t *) version, sizeof version - 1 };
+}
+
+/* Colour scheme query (CSI ? 996 n): what the program draws on is the
+ * terminal's background, so its brightness decides. */
+static bool
+on_color_scheme (GhosttyTerminal terminal, void *userdata, GhosttyColorScheme *out)
+{
+  GhosttyColorRgb background = { 0, 0, 0 };  /* libghostty's default background */
+  ghostty_terminal_get (terminal, GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND, &background);
+  *out = ghostty_color_perceived_luminance (&background) < 0.5 ? GHOSTTY_COLOR_SCHEME_DARK
+                                                               : GHOSTTY_COLOR_SCHEME_LIGHT;
+  return true;
+}
+
 static void
 flush_effects (GtkGhosttyTerminal *self)
 {
@@ -258,6 +300,15 @@ ensure_metrics (GtkGhosttyTerminal *self)
     for (int italic = 0; italic < 2; italic++)
       {
         PangoFontDescription *desc = pango_font_description_copy (self->font);
+#ifdef FALLBACK_FAMILIES
+        const char *family = pango_font_description_get_family (desc);
+        if (family != NULL)
+          {
+            char *families = g_strconcat (family, ",", FALLBACK_FAMILIES, NULL);
+            pango_font_description_set_family (desc, families);
+            g_free (families);
+          }
+#endif
         if (bold)
           pango_font_description_set_weight (desc, PANGO_WEIGHT_BOLD);
         if (italic)
@@ -268,7 +319,7 @@ ensure_metrics (GtkGhosttyTerminal *self)
 
   context = gtk_widget_get_pango_context (GTK_WIDGET (self));
   probe = pango_layout_new (context);
-  pango_layout_set_font_description (probe, self->font);
+  pango_layout_set_font_description (probe, self->fonts[0][0]);
   pango_layout_set_text (probe, "M", -1);
   pango_layout_get_extents (probe, NULL, &logical);
   baseline = pango_layout_get_baseline (probe);
@@ -1879,6 +1930,9 @@ gtk_ghostty_terminal_init (GtkGhosttyTerminal *self)
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_BELL, (const void *) on_bell);
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED, (const void *) on_title_changed);
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_DEVICE_ATTRIBUTES, (const void *) on_device_attributes);
+  ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_SIZE, (const void *) on_size);
+  ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_XTVERSION, (const void *) on_xtversion);
+  ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_COLOR_SCHEME, (const void *) on_color_scheme);
   /* The byte limit defaults to one page (~10 KB): let the line limit decide. */
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &max_bytes);
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &max_lines);

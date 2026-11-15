@@ -175,3 +175,17 @@ def test_select_all_and_selected_text():
 def test_an_empty_screen_reads_as_empty_text():
     term = make()
     assert term.get_text() == ""
+
+
+def test_size_version_and_colour_scheme_queries_are_answered():
+    term = make(40, 10)
+    replies = []
+    term.connect("reply", lambda _t, data: replies.append(data.get_data()))
+    term.feed_data(b"\x1b[18t")  # text area in characters
+    term.feed_data(b"\x1b[>q")   # XTVERSION
+    term.feed_data(b"\x1b[?996n")  # colour scheme
+    assert replies[0] == b"\x1b[8;10;40t"
+    assert replies[1].startswith(b"\x1bP>|gtkghostty ") and replies[1].endswith(b"\x1b\\")
+    assert replies[2] == b"\x1b[?997;1n"  # dark: the default background is black
+    term.feed_data(b"\x1b]11;#ffffff\x1b\\\x1b[?996n")
+    assert replies[-1] == b"\x1b[?997;2n"  # light once the program sets a white background

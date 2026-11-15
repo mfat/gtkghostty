@@ -61,9 +61,12 @@ GTK crashes with an access violation before any test code runs.
 
 ## Open items found on Windows
 
-- **Korean (Hangul) shows as hex boxes** with the default `Monospace` font (Courier New), although
-  Malgun Gothic is installed; CJK ideographs, kana and emoji fall back correctly. Pango's Windows
-  font fallback, not the widget; needs a look at the fallback chain or a better default font.
+- **Fixed: Korean (Hangul) showed as hex boxes.** Pango on Windows falls back only along its built-in
+  alias lists: `Monospace` (Courier New) has no Korean font in its list, and a named family such as
+  Consolas has no fallback at all (Hangul, CJK and emoji all missing). On Windows the widget now
+  defaults to `Cascadia Mono, Consolas, Courier New` and appends Malgun Gothic, Microsoft YaHei,
+  Yu Gothic, Segoe UI Emoji and Segoe UI Symbol to every font, so all scripts render (verified:
+  0 unknown glyphs, and the showcase fixture draws 한국어).
 - The test VM renders with GTK's Cairo renderer (no GPU); real hardware is untested.
 - `GtkGhosttyPty` runs programs under ConPTY (bundled `conpty.dll` from `GTK_GHOSTTY_CONPTY_DLL`, next to
   the program or the library, else the inbox console); `examples/pty_demo.py` runs cmd.exe. Its tests
