@@ -103,6 +103,11 @@ GTK_GHOSTTY_API
 double      gtk_ghostty_terminal_get_font_scale     (GtkGhosttyTerminal         *self);
 
 GTK_GHOSTTY_API
+char       *gtk_ghostty_terminal_get_selected_html  (GtkGhosttyTerminal         *self);
+GTK_GHOSTTY_API
+const char *gtk_ghostty_terminal_get_current_directory_uri (GtkGhosttyTerminal  *self);
+
+GTK_GHOSTTY_API
 gboolean    gtk_ghostty_terminal_search_set_pattern (GtkGhosttyTerminal         *self,
                                                      const char                 *pattern,
                                                      gboolean                    regex,

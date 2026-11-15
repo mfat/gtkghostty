@@ -30,6 +30,9 @@ SCALARS = {
     "guint64": "int", "guint8": "int", "gunichar": "str",
     "gdouble": "float", "gfloat": "float", "none": "None",
 }
+#: String properties that are NULL until set. g-ir-scanner cannot record
+#: nullability for properties, so it is listed here.
+NULLABLE_PROPERTIES = {"title", "current-directory-uri"}
 KEYWORDS = {"def", "class", "from", "in", "is", "lambda", "global", "pass", "return"}
 
 
@@ -166,7 +169,8 @@ def main(argv=None) -> int:
         if props:
             lines.append(f"    class Props({cls.get('parent')}.Props):")
             for prop in props:
-                lines.append(f"        {ident(prop.get('name'))}: {opt(py_type(prop, local), prop.get('name') == 'title')}")
+                lines.append(f"        {ident(prop.get('name'))}: "
+                             f"{opt(py_type(prop, local), prop.get('name') in NULLABLE_PROPERTIES)}")
             lines.append("    props: Props")
         lines.append("    def __init__(self, **properties: typing.Any) -> None: ...")
         for fn in cls.findall("c:constructor", NS):

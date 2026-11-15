@@ -86,7 +86,11 @@ struct _GtkGhosttyTerminal
   GPtrArray *row_cache;   /* Row *, per viewport row */
 
   GByteArray *pending_reply;
-  gboolean pending_bell, pending_title;
+  gboolean pending_bell, pending_title, pending_pwd;
+  char *current_directory_uri;    /* OSC 7 / 9 / 1337 CurrentDir, raw */
+  guint blink_source;             /* cursor blink timer, 0 when not blinking */
+  gboolean blink_off;             /* the blinking cursor is in its hidden phase */
+  gint64 blink_since;             /* last input or output, for GTK's blink timeout */
   char *title;
 
   gboolean legacy_keyboard;
@@ -138,6 +142,7 @@ enum
   PROP_PULL_HISTORY_ON_GROW,
   PROP_FONT_DESC,
   PROP_ALLOW_CLIPBOARD_WRITE,
+  PROP_CURRENT_DIRECTORY_URI,
   N_PROPS,
   /* GtkScrollable, overridden */
   PROP_HADJUSTMENT = N_PROPS,
@@ -231,6 +236,12 @@ static void
 on_title_changed (GhosttyTerminal terminal, void *userdata)
 {
   GTK_GHOSTTY_TERMINAL (userdata)->pending_title = TRUE;
+}
+
+static void
+on_pwd_changed (GhosttyTerminal terminal, void *userdata)
+{
+  GTK_GHOSTTY_TERMINAL (userdata)->pending_pwd = TRUE;
 }
 
 static bool
@@ -340,6 +351,16 @@ flush_effects (GtkGhosttyTerminal *self)
           && title.ptr != NULL)
         self->title = g_utf8_make_valid ((const char *) title.ptr, title.len);
       g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_TITLE]);
+    }
+  if (self->pending_pwd)
+    {
+      GhosttyString pwd = { 0 };
+      self->pending_pwd = FALSE;
+      g_clear_pointer (&self->current_directory_uri, g_free);
+      if (ghostty_terminal_get (self->terminal, GHOSTTY_TERMINAL_DATA_PWD, &pwd) == GHOSTTY_SUCCESS
+          && pwd.ptr != NULL && pwd.len > 0)
+        self->current_directory_uri = g_utf8_make_valid ((const char *) pwd.ptr, pwd.len);
+      g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_CURRENT_DIRECTORY_URI]);
     }
   if (self->pending_bell)
     {
@@ -1101,6 +1122,64 @@ on_preedit_changed (GtkIMContext *im, GtkGhosttyTerminal *self)
   gtk_widget_queue_draw (GTK_WIDGET (self));
 }
 
+/* ------------------------------------------------------------- blinking */
+
+/* The cursor blinks when the terminal says so (the default set with
+ * gtk_ghostty_terminal_set_cursor_blink(), a program's DECSCUSR, mode 12),
+ * at GTK's gtk-cursor-blink-time, only while focused, and stops after
+ * gtk-cursor-blink-timeout seconds without input or output, like GTK's text
+ * widgets. Input and output show it solid again. */
+
+static gboolean
+cursor_wants_blink (GtkGhosttyTerminal *self)
+{
+  bool blinking = false;
+  GtkSettings *settings = gtk_widget_get_settings (GTK_WIDGET (self));
+  gboolean enabled = TRUE;
+  if (!self->focused)
+    return FALSE;
+  g_object_get (settings, "gtk-cursor-blink", &enabled, NULL);
+  if (!enabled)
+    return FALSE;
+  return ghostty_render_state_get (self->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_BLINKING, &blinking)
+           == GHOSTTY_SUCCESS && blinking;
+}
+
+static gboolean
+on_blink (gpointer data)
+{
+  GtkGhosttyTerminal *self = data;
+  GtkSettings *settings = gtk_widget_get_settings (GTK_WIDGET (self));
+  int timeout_s = 10;
+  g_object_get (settings, "gtk-cursor-blink-timeout", &timeout_s, NULL);
+  if (!cursor_wants_blink (self)
+      || (timeout_s > 0 && g_get_monotonic_time () - self->blink_since > (gint64) timeout_s * G_USEC_PER_SEC))
+    {
+      self->blink_off = FALSE;
+      self->blink_source = 0;
+      gtk_widget_queue_draw (GTK_WIDGET (self));
+      return G_SOURCE_REMOVE;
+    }
+  self->blink_off = !self->blink_off;
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+  return G_SOURCE_CONTINUE;
+}
+
+/* Show the cursor solid now and (re)start blinking if it should. */
+static void
+restart_blink (GtkGhosttyTerminal *self)
+{
+  GtkSettings *settings = gtk_widget_get_settings (GTK_WIDGET (self));
+  int period_ms = 1200;
+  g_clear_handle_id (&self->blink_source, g_source_remove);
+  self->blink_off = FALSE;
+  self->blink_since = g_get_monotonic_time ();
+  if (!cursor_wants_blink (self))
+    return;
+  g_object_get (settings, "gtk-cursor-blink-time", &period_ms, NULL);
+  self->blink_source = g_timeout_add (MAX (100, period_ms / 2), on_blink, self);
+}
+
 static void
 draw_cursor (GtkGhosttyTerminal *self, GtkSnapshot *snapshot, const GhosttyRenderStateColors *colors,
              const GdkRGBA *fg_default, const GdkRGBA *bg_default)
@@ -1112,6 +1191,11 @@ draw_cursor (GtkGhosttyTerminal *self, GtkSnapshot *snapshot, const GhosttyRende
   if (ghostty_render_state_get (self->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR, &cursor) != GHOSTTY_SUCCESS
       || !cursor.visible || !cursor.viewport_has_value)
     return;
+  if (self->blink_off)
+    return;
+  /* Start blinking when the terminal turned it on (DECSCUSR, mode 12). */
+  if (self->blink_source == 0 && cursor_wants_blink (self))
+    restart_blink (self);
   x = cursor.viewport_x - (cursor.wide_tail ? 1 : 0);
   y = cursor.viewport_y;
   if ((guint) y >= self->row_cache->len)
@@ -1343,7 +1427,10 @@ encode_key (GtkGhosttyTerminal *self, GtkEventController *controller, guint keyv
     }
   result = ghostty_key_encoder_encode (self->key_encoder, event, buf, sizeof buf, &written);
   if (written > 0 && action != GHOSTTY_KEY_ACTION_RELEASE)
-    scroll_to_bottom (self);  /* typing jumps back to the prompt */
+    {
+      scroll_to_bottom (self);  /* typing jumps back to the prompt */
+      restart_blink (self);
+    }
   if (result == GHOSTTY_SUCCESS)
     emit_input (self, buf, written);
   else if (result == GHOSTTY_OUT_OF_SPACE)
@@ -1496,6 +1583,7 @@ static void
 on_focus_enter (GtkEventControllerFocus *controller, GtkGhosttyTerminal *self)
 {
   self->focused = TRUE;
+  restart_blink (self);
   gtk_im_context_focus_in (self->im);
   send_focus (self, GHOSTTY_FOCUS_GAINED);
   gtk_widget_queue_draw (GTK_WIDGET (self));
@@ -1505,6 +1593,7 @@ static void
 on_focus_leave (GtkEventControllerFocus *controller, GtkGhosttyTerminal *self)
 {
   self->focused = FALSE;
+  restart_blink (self);  /* stops: no blinking without focus */
   gtk_im_context_focus_out (self->im);
   send_focus (self, GHOSTTY_FOCUS_LOST);
   gtk_widget_queue_draw (GTK_WIDGET (self));
@@ -1670,11 +1759,10 @@ set_selection (GtkGhosttyTerminal *self, const GhosttySelection *selection)
 
 /* The selected text as Ghostty copies it: soft wraps joined, trailing blanks trimmed. */
 static char *
-selected_text (GtkGhosttyTerminal *self)
+format_selection (GtkGhosttyTerminal *self, GhosttyFormatterFormat emit)
 {
   GhosttySelection selection = { 0 };
   GhosttyFormatter formatter = NULL;
-  GhosttyFormatterFormat emit = GHOSTTY_FORMATTER_FORMAT_PLAIN;
   bool yes = true;
   uint8_t *ptr = NULL;
   size_t len = 0;
@@ -1697,12 +1785,36 @@ selected_text (GtkGhosttyTerminal *self)
   return text;
 }
 
+static char *
+selected_text (GtkGhosttyTerminal *self)
+{
+  return format_selection (self, GHOSTTY_FORMATTER_FORMAT_PLAIN);
+}
+
+/* Plain text and, for editors that take it, HTML that keeps the colours. */
 static void
 copy_to (GtkGhosttyTerminal *self, GdkClipboard *clipboard)
 {
   char *text = selected_text (self);
   if (text != NULL && text[0] != '\0')
-    gdk_clipboard_set_text (clipboard, text);
+    {
+      char *html = format_selection (self, GHOSTTY_FORMATTER_FORMAT_HTML);
+      GdkContentProvider *providers[2];
+      guint n = 0;
+      GBytes *bytes;
+      providers[n++] = gdk_content_provider_new_typed (G_TYPE_STRING, text);
+      if (html != NULL && html[0] != '\0')
+        {
+          bytes = g_bytes_new_take (html, strlen (html));
+          html = NULL;
+          providers[n++] = gdk_content_provider_new_for_bytes ("text/html", bytes);
+          g_bytes_unref (bytes);
+        }
+      g_free (html);
+      GdkContentProvider *provider = gdk_content_provider_new_union (providers, n);
+      gdk_clipboard_set_content (clipboard, provider);
+      g_object_unref (provider);
+    }
   g_free (text);
 }
 
@@ -1988,6 +2100,8 @@ gtk_ghostty_terminal_feed_data (GtkGhosttyTerminal *self, const guint8 *data, gs
     return;
   ghostty_terminal_vt_write (self->terminal, data, length);
   apply_pending_cursor_reset (self);
+  if (self->blink_source != 0 || self->blink_off)
+    restart_blink (self);
   flush_effects (self);
   update_adjustment (self);
   gtk_widget_queue_draw (GTK_WIDGET (self));
@@ -2509,6 +2623,40 @@ gtk_ghostty_terminal_get_line_at (GtkGhosttyTerminal *self, double x, double y, 
 }
 
 /**
+ * gtk_ghostty_terminal_get_selected_html:
+ * @self: the terminal
+ *
+ * The selection as HTML that keeps its colours and styles (what
+ * gtk_ghostty_terminal_copy_clipboard() offers besides plain text).
+ *
+ * Returns: (transfer full) (nullable): the HTML, or %NULL without a selection
+ */
+char *
+gtk_ghostty_terminal_get_selected_html (GtkGhosttyTerminal *self)
+{
+  g_return_val_if_fail (GTK_GHOSTTY_IS_TERMINAL (self), NULL);
+  return format_selection (self, GHOSTTY_FORMATTER_FORMAT_HTML);
+}
+
+/**
+ * gtk_ghostty_terminal_get_current_directory_uri:
+ * @self: the terminal
+ *
+ * The working directory the shell last reported (OSC 7, OSC 9 or iTerm2's
+ * OSC 1337 CurrentDir), as it sent it: for OSC 7 a `file://host/path` URI,
+ * for the others usually a bare path. Shells report it when configured to,
+ * as with VTE's vte.sh.
+ *
+ * Returns: (nullable): the directory, or %NULL until the shell reports one
+ */
+const char *
+gtk_ghostty_terminal_get_current_directory_uri (GtkGhosttyTerminal *self)
+{
+  g_return_val_if_fail (GTK_GHOSTTY_IS_TERMINAL (self), NULL);
+  return self->current_directory_uri;
+}
+
+/**
  * gtk_ghostty_terminal_get_selected_text:
  * @self: the terminal
  *
@@ -2825,6 +2973,7 @@ gtk_ghostty_terminal_get_property (GObject *object, guint prop_id, GValue *value
     case PROP_PULL_HISTORY_ON_GROW: g_value_set_boolean (value, self->pull_history_on_grow); break;
     case PROP_FONT_DESC: g_value_take_boxed (value, pango_font_description_copy (self->font)); break;
     case PROP_ALLOW_CLIPBOARD_WRITE: g_value_set_boolean (value, self->allow_clipboard_write); break;
+    case PROP_CURRENT_DIRECTORY_URI: g_value_set_string (value, self->current_directory_uri); break;
     case PROP_HADJUSTMENT: g_value_set_object (value, self->hadjustment); break;
     case PROP_VADJUSTMENT: g_value_set_object (value, self->vadjustment); break;
     case PROP_HSCROLL_POLICY: g_value_set_enum (value, self->hscroll_policy); break;
@@ -2913,6 +3062,8 @@ gtk_ghostty_terminal_finalize (GObject *object)
   g_clear_pointer (&self->preedit_attrs, pango_attr_list_unref);
   g_clear_pointer (&self->search, g_regex_unref);
   g_clear_pointer (&self->plain_search, ghostty_search_free);
+  g_clear_handle_id (&self->blink_source, g_source_remove);
+  g_free (self->current_directory_uri);
   g_array_unref (self->held_keys);
   g_clear_pointer (&self->font, pango_font_description_free);
   for (int bold = 0; bold < 2; bold++)
@@ -2998,6 +3149,15 @@ gtk_ghostty_terminal_class_init (GtkGhosttyTerminalClass *klass)
   properties[PROP_ALLOW_CLIPBOARD_WRITE] =
     g_param_spec_boolean ("allow-clipboard-write", NULL, NULL, TRUE,
                           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+  /**
+   * GtkGhosttyTerminal:current-directory-uri:
+   *
+   * The working directory the shell last reported (see
+   * gtk_ghostty_terminal_get_current_directory_uri()), %NULL until then.
+   */
+  properties[PROP_CURRENT_DIRECTORY_URI] =
+    g_param_spec_string ("current-directory-uri", NULL, NULL, NULL,
+                         G_PARAM_READABLE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
   g_object_class_install_properties (object_class, N_PROPS, properties);
   g_object_class_override_property (object_class, PROP_HADJUSTMENT, "hadjustment");
   g_object_class_override_property (object_class, PROP_VADJUSTMENT, "vadjustment");
@@ -3119,6 +3279,7 @@ gtk_ghostty_terminal_init (GtkGhosttyTerminal *self)
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_XTVERSION, (const void *) on_xtversion);
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_COLOR_SCHEME, (const void *) on_color_scheme);
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE, (const void *) on_clipboard_write);
+  ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_PWD_CHANGED, (const void *) on_pwd_changed);
   /* The byte limit defaults to one page (~10 KB): let the line limit decide. */
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &max_bytes);
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &max_lines);

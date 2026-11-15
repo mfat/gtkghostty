@@ -364,3 +364,24 @@ def test_programs_can_set_but_never_read_the_clipboard():
     term.feed_data(b"\x1b]52;c;bm9wZQ==\x1b\\")
     assert _clipboard_text(clipboard) == "copié over ssh"
     assert term.get_text() == ""
+
+
+def test_the_shell_reported_directory_is_a_property():
+    term = make()
+    seen = []
+    term.connect("notify::current-directory-uri", lambda t, _p: seen.append(t.get_current_directory_uri()))
+    assert term.get_current_directory_uri() is None
+    term.feed_data(b"\x1b]7;file://myhost/home/me/src\x1b\\")
+    assert term.props.current_directory_uri == "file://myhost/home/me/src"
+    term.feed_data(b"\x1b]7;\x1b\\")  # cleared
+    assert seen == ["file://myhost/home/me/src", None]
+
+
+def test_the_selection_copies_as_html_with_its_colours():
+    term = make(30, 3)
+    term.feed_data(b"\x1b[31mred\x1b[0m plain")
+    assert term.get_selected_html() is None
+    term.select_all()
+    html = term.get_selected_html()
+    assert "red" in html and "plain" in html and "<" in html
+    assert "color" in html.lower()
