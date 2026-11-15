@@ -12,7 +12,8 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("GtkGhostty", "1")
-from gi.repository import Gdk, GLib, Gtk, GtkGhostty  # noqa: E402
+gi.require_version("Pango", "1.0")
+from gi.repository import Gdk, GLib, Gtk, GtkGhostty, Pango  # noqa: E402
 
 Gtk.init()
 
@@ -319,3 +320,16 @@ def test_a_cursor_change_waits_for_an_unfinished_sequence():
     assert term.get_title() == "hello world"
     assert term.get_text() == ""
     assert term.get_cursor_shape() == GtkGhostty.CursorShape.UNDERLINE
+
+
+def test_annotations_match_what_the_code_accepts():
+    # Issue #2: the title can be NULL and a NULL font restores the default.
+    term = make()
+    assert term.get_title() is None and term.props.title is None
+    default = term.get_font_desc().to_string()
+    term.set_font_desc(Pango.FontDescription.from_string("Serif 20"))
+    assert term.get_font_desc().to_string() != default
+    term.set_font_desc(None)
+    assert term.get_font_desc().to_string() == default
+    text, column = term.get_line_at(1, 1)
+    assert text == "" and column >= 0

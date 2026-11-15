@@ -2104,6 +2104,14 @@ apply_cursor_style (GtkGhosttyTerminal *self)
   apply_pending_cursor_reset (self);
 }
 
+/**
+ * gtk_ghostty_terminal_set_cursor_shape:
+ * @self: the terminal
+ * @shape: the default cursor shape
+ *
+ * Sets the shape the cursor has unless the program chooses another
+ * (DECSCUSR). Applied as soon as the program is between escape sequences.
+ */
 void
 gtk_ghostty_terminal_set_cursor_shape (GtkGhosttyTerminal *self, GtkGhosttyCursorShape shape)
 {
@@ -2112,6 +2120,13 @@ gtk_ghostty_terminal_set_cursor_shape (GtkGhosttyTerminal *self, GtkGhosttyCurso
   apply_cursor_style (self);
 }
 
+/**
+ * gtk_ghostty_terminal_get_cursor_shape:
+ * @self: the terminal
+ *
+ * Returns: the default cursor shape set with
+ *   gtk_ghostty_terminal_set_cursor_shape()
+ */
 GtkGhosttyCursorShape
 gtk_ghostty_terminal_get_cursor_shape (GtkGhosttyTerminal *self)
 {
@@ -2168,6 +2183,12 @@ gtk_ghostty_terminal_set_font_scale (GtkGhosttyTerminal *self, double scale)
   gtk_widget_queue_resize (GTK_WIDGET (self));
 }
 
+/**
+ * gtk_ghostty_terminal_get_font_scale:
+ * @self: the terminal
+ *
+ * Returns: the zoom factor set with gtk_ghostty_terminal_set_font_scale()
+ */
 double
 gtk_ghostty_terminal_get_font_scale (GtkGhosttyTerminal *self)
 {
@@ -2412,7 +2433,7 @@ gtk_ghostty_terminal_hyperlink_at (GtkGhosttyTerminal *self, double x, double y)
  * @self: the terminal
  * @x: widget x
  * @y: widget y
- * @column: (out): the cell column under @x
+ * @column: (out) (optional): the cell column under @x
  *
  * For finding plain-text links: the text of the row under (@x, @y).
  *
@@ -2451,6 +2472,12 @@ gtk_ghostty_terminal_get_selected_text (GtkGhosttyTerminal *self)
   return selected_text (self);
 }
 
+/**
+ * gtk_ghostty_terminal_has_selection:
+ * @self: the terminal
+ *
+ * Returns: whether text is selected
+ */
 gboolean
 gtk_ghostty_terminal_has_selection (GtkGhosttyTerminal *self)
 {
@@ -2459,6 +2486,12 @@ gtk_ghostty_terminal_has_selection (GtkGhosttyTerminal *self)
   return ghostty_terminal_get (self->terminal, GHOSTTY_TERMINAL_DATA_SELECTION, &selection) == GHOSTTY_SUCCESS;
 }
 
+/**
+ * gtk_ghostty_terminal_select_all:
+ * @self: the terminal
+ *
+ * Selects the whole screen, history included.
+ */
 void
 gtk_ghostty_terminal_select_all (GtkGhosttyTerminal *self)
 {
@@ -2468,6 +2501,12 @@ gtk_ghostty_terminal_select_all (GtkGhosttyTerminal *self)
     set_selection (self, &selection);
 }
 
+/**
+ * gtk_ghostty_terminal_unselect_all:
+ * @self: the terminal
+ *
+ * Clears the selection.
+ */
 void
 gtk_ghostty_terminal_unselect_all (GtkGhosttyTerminal *self)
 {
@@ -2518,6 +2557,12 @@ gtk_ghostty_terminal_scroll_lines (GtkGhosttyTerminal *self, int lines)
   scroll_viewport (self, behavior);
 }
 
+/**
+ * gtk_ghostty_terminal_scroll_to_bottom:
+ * @self: the terminal
+ *
+ * Scrolls the view back to the newest output (the program's screen).
+ */
 void
 gtk_ghostty_terminal_scroll_to_bottom (GtkGhosttyTerminal *self)
 {
@@ -2554,6 +2599,12 @@ gtk_ghostty_terminal_get_text (GtkGhosttyTerminal *self)
   return text;
 }
 
+/**
+ * gtk_ghostty_terminal_get_columns:
+ * @self: the terminal
+ *
+ * Returns: the number of columns in the grid
+ */
 guint
 gtk_ghostty_terminal_get_columns (GtkGhosttyTerminal *self)
 {
@@ -2561,6 +2612,12 @@ gtk_ghostty_terminal_get_columns (GtkGhosttyTerminal *self)
   return self->columns;
 }
 
+/**
+ * gtk_ghostty_terminal_get_rows:
+ * @self: the terminal
+ *
+ * Returns: the number of visible rows in the grid
+ */
 guint
 gtk_ghostty_terminal_get_rows (GtkGhosttyTerminal *self)
 {
@@ -2586,6 +2643,14 @@ gtk_ghostty_terminal_set_grid_size (GtkGhosttyTerminal *self, guint columns, gui
   apply_grid_size (self, columns, rows);
 }
 
+/**
+ * gtk_ghostty_terminal_get_title:
+ * @self: the terminal
+ *
+ * The window title the program set (OSC 0 or 2).
+ *
+ * Returns: (nullable): the title, or %NULL before the program sets one
+ */
 const char *
 gtk_ghostty_terminal_get_title (GtkGhosttyTerminal *self)
 {
@@ -2593,6 +2658,14 @@ gtk_ghostty_terminal_get_title (GtkGhosttyTerminal *self)
   return self->title;
 }
 
+/**
+ * gtk_ghostty_terminal_set_font_desc:
+ * @self: the terminal
+ * @font_desc: (nullable): a monospace font, or %NULL for the default one
+ *
+ * Sets the font. A description without a size gets 11 points. The grid is
+ * recomputed, so #GtkGhosttyTerminal::size-changed follows once allocated.
+ */
 void
 gtk_ghostty_terminal_set_font_desc (GtkGhosttyTerminal *self, const PangoFontDescription *font_desc)
 {
@@ -2620,6 +2693,12 @@ gtk_ghostty_terminal_get_font_desc (GtkGhosttyTerminal *self)
   return pango_font_description_copy (self->font);
 }
 
+/**
+ * gtk_ghostty_terminal_get_legacy_keyboard:
+ * @self: the terminal
+ *
+ * Returns: the #GtkGhosttyTerminal:legacy-keyboard property
+ */
 gboolean
 gtk_ghostty_terminal_get_legacy_keyboard (GtkGhosttyTerminal *self)
 {
@@ -2646,6 +2725,12 @@ gtk_ghostty_terminal_set_legacy_keyboard (GtkGhosttyTerminal *self, gboolean leg
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_LEGACY_KEYBOARD]);
 }
 
+/**
+ * gtk_ghostty_terminal_get_pull_history_on_grow:
+ * @self: the terminal
+ *
+ * Returns: the #GtkGhosttyTerminal:pull-history-on-grow property
+ */
 gboolean
 gtk_ghostty_terminal_get_pull_history_on_grow (GtkGhosttyTerminal *self)
 {
@@ -2795,18 +2880,53 @@ gtk_ghostty_terminal_class_init (GtkGhosttyTerminalClass *klass)
   widget_class->realize = gtk_ghostty_terminal_realize;
   widget_class->unrealize = gtk_ghostty_terminal_unrealize;
 
+  /**
+   * GtkGhosttyTerminal:columns:
+   *
+   * Columns in the grid; set by the allocation, or by
+   * gtk_ghostty_terminal_set_grid_size() before there is one.
+   */
   properties[PROP_COLUMNS] = g_param_spec_uint ("columns", NULL, NULL, 0, G_MAXUINT16, DEFAULT_COLUMNS,
                                                 G_PARAM_READABLE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+  /**
+   * GtkGhosttyTerminal:rows:
+   *
+   * Visible rows in the grid.
+   */
   properties[PROP_ROWS] = g_param_spec_uint ("rows", NULL, NULL, 0, G_MAXUINT16, DEFAULT_ROWS,
                                              G_PARAM_READABLE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+  /**
+   * GtkGhosttyTerminal:title:
+   *
+   * The window title the program set (OSC 0 or 2), %NULL until it sets one.
+   */
   properties[PROP_TITLE] = g_param_spec_string ("title", NULL, NULL, NULL,
                                                 G_PARAM_READABLE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+  /**
+   * GtkGhosttyTerminal:legacy-keyboard:
+   *
+   * Encode keys with the legacy protocol even when the program asks for the
+   * kitty keyboard protocol. For a channel that forwards the request but
+   * cannot carry kitty keys: Windows ConPTY turns them into literal text.
+   */
   properties[PROP_LEGACY_KEYBOARD] =
     g_param_spec_boolean ("legacy-keyboard", NULL, NULL, FALSE,
                           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+  /**
+   * GtkGhosttyTerminal:pull-history-on-grow:
+   *
+   * When the grid gets taller, pull rows back from history (as xterm does).
+   * Turn it off for a stream that repaints its own screen after a resize,
+   * such as Windows ConPTY, where pulled rows would be painted over.
+   */
   properties[PROP_PULL_HISTORY_ON_GROW] =
     g_param_spec_boolean ("pull-history-on-grow", NULL, NULL, TRUE,
                           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+  /**
+   * GtkGhosttyTerminal:font-desc:
+   *
+   * The font (see gtk_ghostty_terminal_set_font_desc()).
+   */
   properties[PROP_FONT_DESC] =
     g_param_spec_boxed ("font-desc", NULL, NULL, PANGO_TYPE_FONT_DESCRIPTION,
                         G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
@@ -2820,6 +2940,9 @@ gtk_ghostty_terminal_class_init (GtkGhosttyTerminalClass *klass)
    * GtkGhosttyTerminal::input:
    * @self: the terminal
    * @data: bytes to write to the program (keys, committed text, paste, focus)
+   *
+   * Emitted for what the user does: write @data to the program (its pty, or
+   * the remote end of a connection). See also #GtkGhosttyTerminal::reply.
    */
   signals[SIGNAL_INPUT] = g_signal_new ("input", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_LAST,
                                         0, NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_BYTES);
@@ -2849,6 +2972,8 @@ gtk_ghostty_terminal_class_init (GtkGhosttyTerminalClass *klass)
   /**
    * GtkGhosttyTerminal::bell:
    * @self: the terminal
+   *
+   * The program rang the bell (BEL).
    */
   signals[SIGNAL_BELL] = g_signal_new ("bell", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_LAST,
                                        0, NULL, NULL, NULL, G_TYPE_NONE, 0);
@@ -2863,6 +2988,9 @@ gtk_ghostty_terminal_class_init (GtkGhosttyTerminalClass *klass)
   /**
    * GtkGhosttyTerminal::selection-changed:
    * @self: the terminal
+   *
+   * The selection changed, including while it is dragged out and when a
+   * search selects a hit.
    */
   signals[SIGNAL_SELECTION_CHANGED] = g_signal_new ("selection-changed", G_TYPE_FROM_CLASS (klass),
                                                     G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL, G_TYPE_NONE, 0);

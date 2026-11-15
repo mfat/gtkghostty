@@ -904,6 +904,15 @@ gtk_ghostty_pty_write (GtkGhosttyPty *self, GBytes *data)
   gtk_ghostty_pty_write_data (self, bytes, length);
 }
 
+/**
+ * gtk_ghostty_pty_resize:
+ * @self: the pty
+ * @columns: columns
+ * @rows: rows
+ *
+ * Tells the program the terminal's new size (SIGWINCH on POSIX, a
+ * ConPTY resize on Windows). gtk_ghostty_pty_attach() does this for you.
+ */
 void
 gtk_ghostty_pty_resize (GtkGhosttyPty *self, guint columns, guint rows)
 {
@@ -944,6 +953,12 @@ gtk_ghostty_pty_terminate (GtkGhosttyPty *self)
 #endif
 }
 
+/**
+ * gtk_ghostty_pty_get_pid:
+ * @self: the pty
+ *
+ * Returns: the program's process id
+ */
 int
 gtk_ghostty_pty_get_pid (GtkGhosttyPty *self)
 {
@@ -951,6 +966,12 @@ gtk_ghostty_pty_get_pid (GtkGhosttyPty *self)
   return self->pid;
 }
 
+/**
+ * gtk_ghostty_pty_is_running:
+ * @self: the pty
+ *
+ * Returns: %FALSE once #GtkGhosttyPty::exited was emitted
+ */
 gboolean
 gtk_ghostty_pty_is_running (GtkGhosttyPty *self)
 {
@@ -1052,6 +1073,9 @@ gtk_ghostty_pty_class_init (GtkGhosttyPtyClass *klass)
    * GtkGhosttyPty::output:
    * @self: the pty
    * @data: what the program wrote
+   *
+   * Output from the program, for gtk_ghostty_terminal_feed().
+   * gtk_ghostty_pty_attach() connects it for you.
    */
   signals[SIGNAL_OUTPUT] = g_signal_new ("output", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_LAST,
                                          0, NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_BYTES);
