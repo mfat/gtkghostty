@@ -24,10 +24,12 @@ libgtkghostty = shared_library('gtkghostty-' + api_version,
            '-DGTK_GHOSTTY_VERSION="@0@"'.format(meson.project_version())],
   gnu_symbol_visibility: 'hidden',
   install: true,
-  install_dir: lib_install_dir,
   # libgtkghostty-1.so.0 on Linux and macOS; on Windows a soversion would
   # rename the DLL (gtkghostty-1-0.dll) that applications bundle by name.
-  kwargs: host_machine.system() == 'windows' ? {} : {'soversion': '0'},
+  # install_dir only for a private install: by default Meson puts a Windows
+  # DLL in bin, next to the programs that load it.
+  kwargs: (host_machine.system() == 'windows' ? {} : {'soversion': '0'})
+          + (private_install ? {'install_dir': lib_install_dir} : {}),
 )
 
 if not private_install
