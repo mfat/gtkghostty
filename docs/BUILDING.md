@@ -33,8 +33,9 @@ PKG_CONFIG_PATH=~/.local/opt/ghostty-vt/lib/pkgconfig meson setup _build
 ninja -C _build
 ```
 
-Install it with `meson setup _build --prefix=/usr/local` and `meson install -C _build`, or run it
-from the build tree:
+Install it with `meson setup _build --prefix=/usr/local` and `meson install -C _build`. An
+application that ships its own copy adds `-Dprivate_libdir=myapp`: only the library and typelib
+are installed, into `<libdir>/myapp`. Or run it from the build tree:
 
 ```sh
 export GI_TYPELIB_PATH=$PWD/_build/src

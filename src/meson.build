@@ -2,6 +2,13 @@
 # Copyright 2026 mFat <newmfat@gmail.com> and the gtkghostty contributors
 api_version = '1'
 
+# A private install (see meson_options.txt) ships only what an application
+# loads at run time, out of the shared library paths.
+private_libdir = get_option('private_libdir')
+private_install = private_libdir != ''
+lib_install_dir = get_option('libdir') / private_libdir
+typelib_install_dir = lib_install_dir / 'girepository-1.0'
+
 public_headers = files('gtkghostty.h', 'gtk-ghostty-terminal.h', 'gtk-ghostty-pty.h', 'gtk-ghostty-visibility.h')
 
 sources = files(
@@ -17,9 +24,15 @@ libgtkghostty = shared_library('gtkghostty-' + api_version,
            '-DGTK_GHOSTTY_VERSION="@0@"'.format(meson.project_version())],
   gnu_symbol_visibility: 'hidden',
   install: true,
+  install_dir: lib_install_dir,
+  # libgtkghostty-1.so.0 on Linux and macOS; on Windows a soversion would
+  # rename the DLL (gtkghostty-1-0.dll) that applications bundle by name.
+  kwargs: host_machine.system() == 'windows' ? {} : {'soversion': '0'},
 )
 
-install_headers(public_headers, subdir: 'gtkghostty-' + api_version)
+if not private_install
+  install_headers(public_headers, subdir: 'gtkghostty-' + api_version)
+endif
 
 gtkghostty_dep = declare_dependency(
   link_with: libgtkghostty,
@@ -37,13 +50,17 @@ if get_option('introspection')
     includes: ['Gtk-4.0'],
     header: 'gtkghostty.h',
     install: true,
+    install_dir_gir: private_install ? false : get_option('datadir') / 'gir-1.0',
+    install_dir_typelib: typelib_install_dir,
   )
 endif
 
-import('pkgconfig').generate(libgtkghostty,
+if not private_install
+  import('pkgconfig').generate(libgtkghostty,
   name: 'gtkghostty',
   description: 'GTK4 terminal widget over libghostty-vt',
   subdirs: 'gtkghostty-' + api_version,
   requires: ['gtk4'],
   requires_private: ['libghostty-vt'],
-)
+  )
+endif
