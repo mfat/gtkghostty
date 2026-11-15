@@ -122,7 +122,9 @@ def main(argv=None) -> int:
     prefix = args.prefix.resolve()
 
     with tempfile.TemporaryDirectory(prefix="libghostty-vt-") as work:
-        work_path = Path(work)
+        # Real path: on macOS the temp dir is under /var, a symlink to
+        # /private/var, and Zig builds broken relative paths across it.
+        work_path = Path(work).resolve()
         zig = fetch_zig(args.cache, work_path / "zig")
         unpack(download(*SOURCE, args.cache), work_path)
         unpack(download(*DEPS, args.cache), work_path)
