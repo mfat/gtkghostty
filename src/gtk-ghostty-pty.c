@@ -190,6 +190,16 @@ posix_flush (GtkGhosttyPty *self)
     }
 }
 
+/* After disposal nothing is left to report to; the child must still be
+ * reaped or it stays a zombie until the application exits. */
+static void
+reap_only (GPid pid, int wait_status, gpointer data)
+{
+  (void) wait_status;
+  (void) data;
+  g_spawn_close_pid (pid);
+}
+
 static void
 on_child_exited (GPid pid, int wait_status, gpointer data)
 {
@@ -1011,7 +1021,11 @@ gtk_ghostty_pty_dispose (GObject *object)
       self->io = NULL;
     }
 #else
-  g_clear_handle_id (&self->child_source, g_source_remove);
+  if (self->child_source != 0)
+    {
+      g_clear_handle_id (&self->child_source, g_source_remove);
+      g_child_watch_add ((GPid) self->pid, reap_only, NULL);
+    }
   posix_close_master (self);
 #endif
   G_OBJECT_CLASS (gtk_ghostty_pty_parent_class)->dispose (object);

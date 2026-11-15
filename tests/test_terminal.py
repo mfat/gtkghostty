@@ -307,3 +307,15 @@ def test_a_search_hit_in_history_scrolls_into_view():
         assert term.search_find(True)
         assert term.get_selected_text() == "needle"
         assert adjustment.get_value() < bottom - 50, (regex, adjustment.get_value())
+
+
+def test_a_cursor_change_waits_for_an_unfinished_sequence():
+    # Issue #1: changing the cursor injected bytes into a half-received OSC.
+    term = make()
+    term.feed_data(b"\x1b]2;hello")
+    term.set_cursor_shape(GtkGhostty.CursorShape.UNDERLINE)
+    term.set_cursor_blink(True)
+    term.feed_data(b" world\x07")
+    assert term.get_title() == "hello world"
+    assert term.get_text() == ""
+    assert term.get_cursor_shape() == GtkGhostty.CursorShape.UNDERLINE

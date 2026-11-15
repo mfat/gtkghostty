@@ -103,6 +103,9 @@ struct _GtkGhosttyTerminal
   GhosttyColorRgb builtin_fg, builtin_bg;  /* what the renderer falls back to */
   GtkGhosttyCursorShape cursor_shape;
   gboolean cursor_blink;
+  gboolean cursor_reset_pending;  /* waiting for the parser to reach ground */
+  GString *key_commit;          /* IM text committed while filtering a key */
+  GArray *held_keys;            /* keycodes pressed and not yet released */
   GhosttySearch plain_search;   /* libghostty search for plain, caseless text */
   GRegex *search;               /* regex or case-sensitive search, if any */
   int search_row, search_column;  /* last hit (screen row), or -1 */
@@ -166,6 +169,7 @@ G_DEFINE_FINAL_TYPE_WITH_CODE (GtkGhosttyTerminal, gtk_ghostty_terminal, GTK_TYP
 static void update_adjustment (GtkGhosttyTerminal *self);
 static void scroll_to_bottom (GtkGhosttyTerminal *self);
 static gboolean is_grid_symbol (gunichar c);
+static void apply_pending_cursor_reset (GtkGhosttyTerminal *self);
 
 /* ------------------------------------------------------------------ rows */
 
@@ -1223,26 +1227,31 @@ base_keyval (GtkEventController *controller, guint keycode, guint keyval)
   return gdk_keyval_to_lower (keyval);
 }
 
+/* Encodes one key event with libghostty's encoder, which follows the
+ * protocol the program asked for (legacy, or kitty with its flags). @utf8
+ * is the text the key produced, from the input method when it committed
+ * one; releases carry none. FALSE for a key it has nothing for, so the
+ * event can go on to the application. */
 static gboolean
-on_key_pressed (GtkEventControllerKey *controller, guint keyval, guint keycode,
-                GdkModifierType state, GtkGhosttyTerminal *self)
+encode_key (GtkGhosttyTerminal *self, GtkEventController *controller, guint keyval, guint keycode,
+            GdkModifierType state, GhosttyKeyAction action, const char *utf8)
 {
   GhosttyKeyEvent event = NULL;
   GhosttyKey key;
   GhosttyMods mods;
   gunichar text = 0, unshifted;
-  char utf8[8];
-  int utf8_len = 0;
+  char own_utf8[8];
+  size_t utf8_len = 0;
   uint8_t buf[128];
   size_t written = 0;
   GhosttyResult result;
 
-  if (is_modifier_key (keyval))
-    return FALSE;
-
   key = gtk_ghostty_key_from_name (gdk_keyval_name (keyval));
   mods = mods_from_state (state);
-  text = gdk_keyval_to_unicode (keyval);
+  if (utf8 != NULL && utf8[0] != '\0')
+    text = g_utf8_get_char (utf8);
+  else if (action != GHOSTTY_KEY_ACTION_RELEASE)
+    text = gdk_keyval_to_unicode (keyval);
   if (text < 0x20 || text == 0x7f)
     text = 0;  /* control characters are the encoder's job */
   /* Windows reports AltGr as Ctrl+Alt: AltGr+Q on a German layout is "@",
@@ -1253,12 +1262,19 @@ on_key_pressed (GtkEventControllerKey *controller, guint keyval, guint keycode,
   if (key == GHOSTTY_KEY_UNIDENTIFIED && text == 0)
     return FALSE;
   if (text != 0)
-    utf8_len = g_unichar_to_utf8 (text, utf8);
-  unshifted = gdk_keyval_to_unicode (base_keyval (GTK_EVENT_CONTROLLER (controller), keycode, keyval));
+    {
+      if (utf8 == NULL || utf8[0] == '\0')
+        {
+          own_utf8[g_unichar_to_utf8 (text, own_utf8)] = '\0';
+          utf8 = own_utf8;
+        }
+      utf8_len = strlen (utf8);
+    }
+  unshifted = gdk_keyval_to_unicode (base_keyval (controller, keycode, keyval));
 
   if (ghostty_key_event_new (NULL, &event) != GHOSTTY_SUCCESS)
     return FALSE;
-  ghostty_key_event_set_action (event, GHOSTTY_KEY_ACTION_PRESS);
+  ghostty_key_event_set_action (event, action);
   ghostty_key_event_set_key (event, key);
   ghostty_key_event_set_mods (event, mods);
   /* Shift produced the text ('A', '!'): consumed, or kitty sends CSI 97;2u. */
@@ -1266,7 +1282,7 @@ on_key_pressed (GtkEventControllerKey *controller, guint keyval, guint keycode,
   if (unshifted >= 0x20)
     ghostty_key_event_set_unshifted_codepoint (event, unshifted);
   if (utf8_len > 0)
-    ghostty_key_event_set_utf8 (event, (GhosttyString) { (const uint8_t *) utf8, (size_t) utf8_len });
+    ghostty_key_event_set_utf8 (event, (GhosttyString) { (const uint8_t *) utf8, utf8_len });
 
   ghostty_key_encoder_set_from_terminal (self->key_encoder, self->terminal);
   if (self->legacy_keyboard)
@@ -1276,7 +1292,7 @@ on_key_pressed (GtkEventControllerKey *controller, guint keyval, guint keycode,
       ghostty_key_encoder_set (self->key_encoder, GHOSTTY_KEY_ENCODER_OPT_KITTY_FLAGS, &flags);
     }
   result = ghostty_key_encoder_encode (self->key_encoder, event, buf, sizeof buf, &written);
-  if (written > 0)
+  if (written > 0 && action != GHOSTTY_KEY_ACTION_RELEASE)
     scroll_to_bottom (self);  /* typing jumps back to the prompt */
   if (result == GHOSTTY_SUCCESS)
     emit_input (self, buf, written);
@@ -1291,9 +1307,125 @@ on_key_pressed (GtkEventControllerKey *controller, guint keyval, guint keycode,
   return TRUE;
 }
 
+static gboolean
+preedit_active (GtkGhosttyTerminal *self)
+{
+  return self->preedit != NULL && self->preedit[0] != '\0';
+}
+
+/* The input method sees every key first. A key it composes with (dead keys,
+ * CJK) stays with it and the result goes out as text; a plain character it
+ * merely passes through is encoded as a key, so a program that asked for the
+ * kitty protocol gets kitty sequences and not raw text (issue #1). */
+static gboolean
+filter_through_im (GtkGhosttyTerminal *self, GtkEventController *controller, gboolean *raw_sent, char **text)
+{
+  GdkEvent *event = gtk_event_controller_get_current_event (controller);
+  gboolean composing = preedit_active (self), handled;
+  *raw_sent = FALSE;
+  *text = NULL;
+  if (event == NULL)
+    return FALSE;
+  self->key_commit = g_string_new (NULL);
+  handled = gtk_im_context_filter_keypress (self->im, event);
+  if (self->key_commit->len > 0)
+    {
+      /* Passed through means the input method committed exactly what the
+       * key types by itself. Anything else (an e key committing é after a
+       * dead key; a whole word) it composed. Not every input method shows a
+       * preedit while composing, so that alone cannot tell. */
+      gunichar own = gdk_keyval_to_unicode (gdk_key_event_get_keyval (event));
+      gboolean passed_through = g_utf8_strlen (self->key_commit->str, -1) == 1
+                                && g_utf8_get_char (self->key_commit->str) == own;
+      if (composing || !passed_through)
+        {
+          /* A finished composition: text, as the input method meant it. */
+          scroll_to_bottom (self);
+          emit_input (self, (const guint8 *) self->key_commit->str, self->key_commit->len);
+          *raw_sent = TRUE;
+        }
+      else
+        *text = g_strdup (self->key_commit->str);
+    }
+  g_string_free (self->key_commit, TRUE);
+  self->key_commit = NULL;
+  return handled;
+}
+
+static gboolean
+key_is_held (GtkGhosttyTerminal *self, guint keycode)
+{
+  for (guint i = 0; i < self->held_keys->len; i++)
+    if (g_array_index (self->held_keys, guint, i) == keycode)
+      return TRUE;
+  return FALSE;
+}
+
+static void
+key_released (GtkGhosttyTerminal *self, guint keycode)
+{
+  for (guint i = 0; i < self->held_keys->len; i++)
+    if (g_array_index (self->held_keys, guint, i) == keycode)
+      {
+        g_array_remove_index_fast (self->held_keys, i);
+        return;
+      }
+}
+
+static gboolean
+on_key_pressed (GtkEventControllerKey *controller, guint keyval, guint keycode,
+                GdkModifierType state, GtkGhosttyTerminal *self)
+{
+  gboolean raw_sent, repeat, handled;
+  char *text = NULL;
+
+  if (filter_through_im (self, GTK_EVENT_CONTROLLER (controller), &raw_sent, &text) && text == NULL)
+    return TRUE;  /* composing, or the composition already went out */
+  if (raw_sent)
+    {
+      g_free (text);
+      return TRUE;
+    }
+  if (is_modifier_key (keyval))
+    {
+      g_free (text);
+      return FALSE;
+    }
+  repeat = key_is_held (self, keycode);
+  handled = encode_key (self, GTK_EVENT_CONTROLLER (controller), keyval, keycode, state,
+                        repeat ? GHOSTTY_KEY_ACTION_REPEAT : GHOSTTY_KEY_ACTION_PRESS, text);
+  if (handled && !repeat)
+    g_array_append_val (self->held_keys, keycode);
+  g_free (text);
+  return handled;
+}
+
+static void
+on_key_released (GtkEventControllerKey *controller, guint keyval, guint keycode,
+                 GdkModifierType state, GtkGhosttyTerminal *self)
+{
+  gboolean raw_sent, was_held = key_is_held (self, keycode);
+  char *text = NULL;
+
+  filter_through_im (self, GTK_EVENT_CONTROLLER (controller), &raw_sent, &text);
+  g_free (text);
+  key_released (self, keycode);
+  /* Only keys whose press went out get a release (the encoder sends it only
+   * when the program asked for event types). */
+  if (was_held && !raw_sent && !is_modifier_key (keyval))
+    encode_key (self, GTK_EVENT_CONTROLLER (controller), keyval, keycode, state,
+                GHOSTTY_KEY_ACTION_RELEASE, NULL);
+}
+
 static void
 on_im_commit (GtkIMContext *im, const char *text, GtkGhosttyTerminal *self)
 {
+  if (self->key_commit != NULL)
+    {
+      /* Committed while filtering a key: the key handler decides. */
+      g_string_append (self->key_commit, text);
+      return;
+    }
   scroll_to_bottom (self);
   emit_input (self, (const guint8 *) text, strlen (text));
 }
@@ -1805,6 +1937,7 @@ gtk_ghostty_terminal_feed_data (GtkGhosttyTerminal *self, const guint8 *data, gs
   if (length == 0)
     return;
   ghostty_terminal_vt_write (self->terminal, data, length);
+  apply_pending_cursor_reset (self);
   flush_effects (self);
   update_adjustment (self);
   gtk_widget_queue_draw (GTK_WIDGET (self));
@@ -1934,6 +2067,27 @@ gtk_ghostty_terminal_set_colors (GtkGhosttyTerminal *self, const GdkRGBA *foregr
   gtk_widget_queue_draw (GTK_WIDGET (self));
 }
 
+/* Whether the parser is between sequences (and not inside a UTF-8
+ * character), so bytes of our own cannot split one of the program's. */
+static gboolean
+parser_at_ground (GtkGhosttyTerminal *self)
+{
+  GhosttyTerminalWriteStop stop = GHOSTTY_INIT_SIZED (GhosttyTerminalWriteStop);
+  return ghostty_terminal_vt_write_until (self->terminal, NULL, 0, GHOSTTY_TERMINAL_BOUNDARY_GROUND, &stop)
+         == GHOSTTY_SUCCESS;
+}
+
+static void
+apply_pending_cursor_reset (GtkGhosttyTerminal *self)
+{
+  if (!self->cursor_reset_pending || !parser_at_ground (self))
+    return;
+  self->cursor_reset_pending = FALSE;
+  ghostty_terminal_vt_write (self->terminal, (const uint8_t *) "\x1b[0 q", 5);
+  flush_effects (self);
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
 static void
 apply_cursor_style (GtkGhosttyTerminal *self)
 {
@@ -1943,10 +2097,11 @@ apply_cursor_style (GtkGhosttyTerminal *self)
   bool blink = self->cursor_blink;
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE, &style);
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK, &blink);
-  /* The defaults apply on a cursor-style reset (DECSCUSR 0); do one now. */
-  ghostty_terminal_vt_write (self->terminal, (const uint8_t *) "\x1b[0 q", 5);
-  flush_effects (self);
-  gtk_widget_queue_draw (GTK_WIDGET (self));
+  /* The defaults apply on a cursor-style reset (DECSCUSR 0). Doing one now
+   * would land inside a sequence the program has only partly sent, so it
+   * waits for the parser to be between sequences. */
+  self->cursor_reset_pending = TRUE;
+  apply_pending_cursor_reset (self);
 }
 
 void
@@ -2615,6 +2770,7 @@ gtk_ghostty_terminal_finalize (GObject *object)
   g_clear_pointer (&self->preedit_attrs, pango_attr_list_unref);
   g_clear_pointer (&self->search, g_regex_unref);
   g_clear_pointer (&self->plain_search, ghostty_search_free);
+  g_array_unref (self->held_keys);
   g_clear_pointer (&self->font, pango_font_description_free);
   for (int bold = 0; bold < 2; bold++)
     for (int italic = 0; italic < 2; italic++)
@@ -2726,6 +2882,7 @@ gtk_ghostty_terminal_init (GtkGhosttyTerminal *self)
   self->n_rows = DEFAULT_ROWS;
   self->pull_history_on_grow = TRUE;
   self->font_scale = 1.0;
+  self->held_keys = g_array_new (FALSE, FALSE, sizeof (guint));
   self->search_row = self->search_column = -1;
   self->pending_reply = g_byte_array_new ();
   self->row_cache = g_ptr_array_new_with_free_func (row_free);
@@ -2778,8 +2935,10 @@ gtk_ghostty_terminal_init (GtkGhosttyTerminal *self)
   g_signal_connect (self->im, "preedit-end", G_CALLBACK (on_preedit_changed), self);
 
   keys = gtk_event_controller_key_new ();
-  gtk_event_controller_key_set_im_context (GTK_EVENT_CONTROLLER_KEY (keys), self->im);
+  /* The input method is fed from the handlers (filter_through_im), not by
+   * the controller, which would let it swallow plain characters. */
   g_signal_connect (keys, "key-pressed", G_CALLBACK (on_key_pressed), self);
+  g_signal_connect (keys, "key-released", G_CALLBACK (on_key_released), self);
   gtk_widget_add_controller (GTK_WIDGET (self), keys);
 
   focus = gtk_event_controller_focus_new ();

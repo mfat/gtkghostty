@@ -111,3 +111,24 @@ def test_missing_program_is_reported():
         pty.connect("exited", lambda _p, status: exits.append(status))
         assert pump_until(lambda: exits)
         assert exits == [127]
+
+
+@pytest.mark.skipif(sys.platform == "win32" or not os.path.exists("/proc"), reason="reads /proc")
+def test_dropping_a_running_pty_leaves_no_zombie():
+    # Issue #1: disposal hung up the child but nothing reaped it.
+    pty = GtkGhostty.Pty.spawn(["sleep", "30"], None, None, 40, 10)
+    pid = pty.get_pid()
+    assert pid > 0
+    del pty
+    import gc
+
+    gc.collect()
+
+    def gone():
+        try:
+            with open(f"/proc/{pid}/stat") as stat:
+                return stat.read().split(") ")[1][0] not in "RSDTZ"
+        except FileNotFoundError:
+            return True
+
+    assert pump_until(gone, 5), "child still present (zombie?)"
