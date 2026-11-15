@@ -19,18 +19,32 @@ Goal: an independent GTK4 terminal component usable from native GObject applicat
 
 ## Building (first milestone)
 
-Needs GTK ≥ 4.14, Meson, a C compiler, GObject Introspection and libghostty-vt 1.0
-(build it from the official release with Zig 0.17, see [BOOTSTRAP.md](docs/BOOTSTRAP.md)).
+Needs GTK ≥ 4.14, Meson, a C compiler, GObject Introspection and libghostty-vt 1.0.
+`packaging/windows/build-libghostty-vt.py` builds libghostty-vt from the official
+release (it downloads the pinned Zig 0.17 and checks every download's SHA-256), on
+Linux too:
 
 ```sh
-PKG_CONFIG_PATH=/path/to/libghostty-vt/lib/pkgconfig meson setup _build
+python3 packaging/windows/build-libghostty-vt.py --target native --prefix ~/deps/ghostty-vt
+PKG_CONFIG_PATH=~/deps/ghostty-vt/lib/pkgconfig meson setup _build
 ninja -C _build
-LIBGHOSTTY_VT_LIBDIR=/path/to/libghostty-vt/lib xvfb-run -a tests/run.sh _build
-GI_TYPELIB_PATH=_build/src LD_LIBRARY_PATH=_build/src:/path/to/libghostty-vt/lib \
+LIBGHOSTTY_VT_LIBDIR=~/deps/ghostty-vt/lib xvfb-run -a tests/run.sh _build
+GI_TYPELIB_PATH=_build/src LD_LIBRARY_PATH=_build/src:~/deps/ghostty-vt/lib \
   python3 examples/pty_demo.py htop          # or --fixture tests/fixtures/showcase.vt
 ```
 
-Windows (MSVC + gvsbuild GTK): see [docs/WINDOWS.md](docs/WINDOWS.md).
+To install system-wide, `meson setup _build --prefix=/usr/local` and
+`meson install -C _build` (the typelib goes to `lib/girepository-1.0`).
+
+### Windows
+
+Releases carry `gtkghostty-<version>-gvsbuild-<gvsbuild version>-x64.zip`, built
+with Visual Studio against that [gvsbuild](https://github.com/wingtk/gvsbuild) GTK
+release for python.org Python: `bin` (gtkghostty-1.dll, ghostty-vt.dll),
+`lib/girepository-1.0` (the typelib) and the licences. Unzip it over the GTK
+prefix, or put its `bin` on `PATH` and its typelib directory on `GI_TYPELIB_PATH`.
+`packaging/windows/build-gvsbuild.ps1` builds the zip; [docs/WINDOWS.md](docs/WINDOWS.md)
+covers building by hand.
 
 From Python: `gi.require_version("GtkGhostty", "1"); from gi.repository import GtkGhostty`.
 The widget takes program output with `feed()` and emits `input`, `reply`, `size-changed`,

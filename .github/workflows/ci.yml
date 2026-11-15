@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright 2026 mFat <newmfat@gmail.com> and the gtkghostty contributors
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build pkgconf libgtk-4-dev gobject-introspection \
+            libgirepository1.0-dev python3-gi python3-pytest gir1.2-gtk-4.0 \
+            xvfb xauth xdotool x11-xserver-utils
+
+      # Pinned Zig and release tarballs, so the script is the cache key.
+      - name: Cache libghostty-vt
+        id: vt-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/deps/ghostty-vt
+          key: ghostty-vt-linux-${{ hashFiles('packaging/windows/build-libghostty-vt.py') }}
+
+      - name: Build libghostty-vt
+        if: steps.vt-cache.outputs.cache-hit != 'true'
+        run: python3 packaging/windows/build-libghostty-vt.py --target native --prefix ~/deps/ghostty-vt
+
+      - name: Build
+        run: |
+          export PKG_CONFIG_PATH=~/deps/ghostty-vt/lib/pkgconfig
+          meson setup _build
+          meson compile -C _build
+
+      - name: Test
+        env:
+          GDK_BACKEND: x11
+          LIBGHOSTTY_VT_LIBDIR: /home/runner/deps/ghostty-vt/lib
+        run: xvfb-run -a tests/run.sh _build -rs
+
+  windows-gvsbuild:
+    # Visual Studio build against gvsbuild's GTK, for apps that ship gvsbuild
+    # GTK with python.org Python (SSH Pilot's Windows installer). Produces the
+    # zip packaging/windows/build-gvsbuild.ps1 describes; tagged releases
+    # attach it.
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build tools
+        # setuptools: gvsbuild's g-ir-scanner imports distutils, which
+        # Python 3.12 removed; setuptools provides it.
+        run: python -m pip install meson ninja setuptools pytest
+
+      - name: Cache libghostty-vt
+        uses: actions/cache@v4
+        with:
+          path: _win/ghostty-vt
+          key: ghostty-vt-windows-${{ hashFiles('packaging/windows/build-libghostty-vt.py') }}
+
+      - name: Build and package
+        shell: pwsh
+        run: packaging/windows/build-gvsbuild.ps1
+
+      - name: Test
+        shell: pwsh
+        run: |
+          $env:PATH = "$PWD\_win\prefix\bin;$PWD\_win\ghostty-vt\bin;C:\gtk-build\gtk\x64\release\bin;$env:PATH"
+          $env:GI_TYPELIB_PATH = "$PWD\_win\prefix\lib\girepository-1.0;C:\gtk-build\gtk\x64\release\lib\girepository-1.0"
+          python -m pytest -q -p no:cacheprovider tests -rs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gtkghostty-gvsbuild-x64
+          path: gtkghostty-*-gvsbuild-*-x64.zip*
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" (Get-ChildItem gtkghostty-*-gvsbuild-*-x64.zip*).FullName --clobber
