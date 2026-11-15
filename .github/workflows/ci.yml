@@ -51,6 +51,46 @@ jobs:
           LIBGHOSTTY_VT_LIBDIR: /home/runner/deps/ghostty-vt/lib
         run: xvfb-run -a tests/run.sh _build -rs
 
+  macos:
+    # Homebrew GTK 4, as GTK apps on macOS usually get it. GTK runs on the
+    # runner's display; the keyboard tests need X11 and skip here.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencies
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+        run: brew install meson ninja pkgconf gtk4 gobject-introspection pygobject3
+
+      - name: Cache libghostty-vt
+        id: vt-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/deps/ghostty-vt
+          key: ghostty-vt-macos-${{ runner.arch }}-${{ hashFiles('packaging/windows/build-libghostty-vt.py') }}
+
+      - name: Build libghostty-vt
+        if: steps.vt-cache.outputs.cache-hit != 'true'
+        run: python3 packaging/windows/build-libghostty-vt.py --target native --prefix ~/deps/ghostty-vt
+
+      - name: Build
+        run: |
+          export PKG_CONFIG_PATH=~/deps/ghostty-vt/lib/pkgconfig
+          meson setup _build
+          meson compile -C _build
+
+      - name: Test
+        env:
+          LIBGHOSTTY_VT_LIBDIR: /Users/runner/deps/ghostty-vt/lib
+        run: |
+          # Homebrew's Python is externally managed: pytest goes in a venv
+          # that still sees Homebrew's PyGObject.
+          python3 -m venv --system-site-packages _venv
+          _venv/bin/pip install --quiet pytest
+          PATH="$PWD/_venv/bin:$PATH" tests/run.sh _build -rs
+
   windows-gvsbuild:
     # Visual Studio build against gvsbuild's GTK, for apps that ship gvsbuild
     # GTK with python.org Python (SSH Pilot's Windows installer). Produces the

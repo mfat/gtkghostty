@@ -11,4 +11,6 @@ build=${1:-$here/_build}
 [ $# -gt 0 ] && shift
 export GI_TYPELIB_PATH="$build/src${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
 export LD_LIBRARY_PATH="$build/src${LIBGHOSTTY_VT_LIBDIR:+:$LIBGHOSTTY_VT_LIBDIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# macOS looks up libraries on DYLD_LIBRARY_PATH instead.
+export DYLD_LIBRARY_PATH="$build/src${LIBGHOSTTY_VT_LIBDIR:+:$LIBGHOSTTY_VT_LIBDIR}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 exec python3 -m pytest -q "$here/tests" "$@"

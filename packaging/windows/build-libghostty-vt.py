@@ -12,7 +12,7 @@ release's SHA256SUMS is minisign-signed by Ghostty; the hashes below were
 taken from it after checking that signature).
 
     python build-libghostty-vt.py --prefix C:\\deps\\ghostty-vt          # Windows x64
-    python build-libghostty-vt.py --prefix ~/deps/ghostty-vt --target native
+    python build-libghostty-vt.py --prefix ~/deps/ghostty-vt --target native   # Linux, macOS
 
 The prefix gets bin/ghostty-vt.dll (or lib/libghostty-vt.so.*), the headers,
 the import library, lib/pkgconfig/libghostty-vt.pc, and share/licenses with
@@ -45,6 +45,8 @@ ZIG = {
     "aarch64-windows": ("zip", "4789895bdb1e312a2ea73b2a7c0a0cc8d2ab62ba6976e834a7c54cf443377c15"),
     "x86_64-linux": ("tar.xz", "3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a"),
     "aarch64-linux": ("tar.xz", "a1546d5646eb184437918d6635ca6b762a0e889eac09cef720ee7a1ed3fe7795"),
+    "x86_64-macos": ("tar.xz", "9af07b20319fbd0c92ee46ad23e81d6a782b1aaea2cfb8dcbff35f1d2c7ddbb7"),
+    "aarch64-macos": ("tar.xz", "75f1bc7a1e9852f17ec9a0c1895f767c4ec56d46bc8a834920eece1d0359dd8d"),
 }
 WINDOWS_TARGET = "x86_64-windows-gnu"
 
@@ -97,7 +99,7 @@ def unpack(archive: Path, destination: Path) -> None:
 def fetch_zig(cache: Path, work: Path) -> Path:
     machine = platform.machine().lower()
     arch = {"amd64": "x86_64", "x86_64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64"}.get(machine)
-    system = {"Windows": "windows", "Linux": "linux"}.get(platform.system())
+    system = {"Windows": "windows", "Linux": "linux", "Darwin": "macos"}.get(platform.system())
     host = f"{arch}-{system}"
     if host not in ZIG:
         raise SystemExit(f"no pinned Zig {ZIG_VERSION} download for {host}; add it to ZIG")
