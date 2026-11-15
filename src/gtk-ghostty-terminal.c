@@ -99,6 +99,14 @@ struct _GtkGhosttyTerminal
   int preedit_cursor;           /* in characters */
   GdkRectangle im_location;     /* last caret rectangle told to the IM */
 
+  double font_scale;
+  GhosttyColorRgb builtin_fg, builtin_bg;  /* what the renderer falls back to */
+  GtkGhosttyCursorShape cursor_shape;
+  gboolean cursor_blink;
+  GhosttySearch plain_search;   /* libghostty search for plain, caseless text */
+  GRegex *search;               /* regex or case-sensitive search, if any */
+  int search_row, search_column;  /* last hit (screen row), or -1 */
+
   /* GtkScrollable: the vertical adjustment mirrors libghostty's scrollbar. */
   GtkAdjustment *hadjustment, *vadjustment;
   GtkScrollablePolicy hscroll_policy, vscroll_policy;
@@ -139,11 +147,18 @@ enum
   SIGNAL_REPLY,
   SIGNAL_SIZE_CHANGED,
   SIGNAL_BELL,
+  SIGNAL_CONTENTS_CHANGED,
+  SIGNAL_SELECTION_CHANGED,
   N_SIGNALS
 };
 
 static GParamSpec *properties[N_PROPS];
 static guint signals[N_SIGNALS];
+
+G_DEFINE_ENUM_TYPE (GtkGhosttyCursorShape, gtk_ghostty_cursor_shape,
+  G_DEFINE_ENUM_VALUE (GTK_GHOSTTY_CURSOR_SHAPE_BLOCK, "block"),
+  G_DEFINE_ENUM_VALUE (GTK_GHOSTTY_CURSOR_SHAPE_IBEAM, "ibeam"),
+  G_DEFINE_ENUM_VALUE (GTK_GHOSTTY_CURSOR_SHAPE_UNDERLINE, "underline"))
 
 G_DEFINE_FINAL_TYPE_WITH_CODE (GtkGhosttyTerminal, gtk_ghostty_terminal, GTK_TYPE_WIDGET,
                                G_IMPLEMENT_INTERFACE (GTK_TYPE_SCROLLABLE, NULL))
@@ -307,6 +322,15 @@ ensure_metrics (GtkGhosttyTerminal *self)
     for (int italic = 0; italic < 2; italic++)
       {
         PangoFontDescription *desc = pango_font_description_copy (self->font);
+        if (self->font_scale != 1.0)
+          {
+            int size = pango_font_description_get_size (desc);
+            int scaled = MAX (PANGO_SCALE, (int) (size * self->font_scale + 0.5));
+            if (pango_font_description_get_size_is_absolute (desc))
+              pango_font_description_set_absolute_size (desc, scaled);
+            else
+              pango_font_description_set_size (desc, scaled);
+          }
 #ifdef FALLBACK_FAMILIES
         const char *family = pango_font_description_get_family (desc);
         if (family != NULL)
@@ -1459,6 +1483,7 @@ set_selection (GtkGhosttyTerminal *self, const GhosttySelection *selection)
 {
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_SELECTION, selection);
   gtk_widget_queue_draw (GTK_WIDGET (self));
+  g_signal_emit (self, signals[SIGNAL_SELECTION_CHANGED], 0);
 }
 
 /* The selected text as Ghostty copies it: soft wraps joined, trailing blanks trimmed. */
@@ -1783,6 +1808,7 @@ gtk_ghostty_terminal_feed_data (GtkGhosttyTerminal *self, const guint8 *data, gs
   flush_effects (self);
   update_adjustment (self);
   gtk_widget_queue_draw (GTK_WIDGET (self));
+  g_signal_emit (self, signals[SIGNAL_CONTENTS_CHANGED], 0);
 }
 
 /**
@@ -1852,6 +1878,408 @@ gtk_ghostty_terminal_paste_is_safe (const char *text)
 {
   g_return_val_if_fail (text != NULL, TRUE);
   return ghostty_paste_is_safe (text, strlen (text));
+}
+
+/* --------------------------------------------------------- appearance */
+
+static GhosttyColorRgb
+to_rgb (const GdkRGBA *color)
+{
+  return (GhosttyColorRgb) { (uint8_t) CLAMP (color->red * 255 + 0.5, 0, 255),
+                             (uint8_t) CLAMP (color->green * 255 + 0.5, 0, 255),
+                             (uint8_t) CLAMP (color->blue * 255 + 0.5, 0, 255) };
+}
+
+/**
+ * gtk_ghostty_terminal_set_colors:
+ * @self: the terminal
+ * @foreground: (nullable): default text colour, or %NULL for the built-in one
+ * @background: (nullable): default background, or %NULL for the built-in one
+ * @cursor: (nullable): cursor colour, or %NULL to follow the text
+ * @palette: (array length=palette_size) (nullable): the first palette
+ *   entries (16 for a usual theme); the rest keep their defaults
+ * @palette_size: number of palette entries, at most 256
+ *
+ * Sets the theme. These are defaults: programs can still change colours
+ * with OSC sequences, as in other terminals.
+ */
+void
+gtk_ghostty_terminal_set_colors (GtkGhosttyTerminal *self, const GdkRGBA *foreground, const GdkRGBA *background,
+                                 const GdkRGBA *cursor, const GdkRGBA *palette, gsize palette_size)
+{
+  GhosttyColorRgb fg, bg, cur, colors[256];
+  g_return_if_fail (GTK_GHOSTTY_IS_TERMINAL (self));
+  /* Never leave the defaults unset: colour queries (OSC 10/11), which vim
+   * and others use to pick a light or dark look, go unanswered without. */
+  fg = foreground != NULL ? to_rgb (foreground) : self->builtin_fg;
+  bg = background != NULL ? to_rgb (background) : self->builtin_bg;
+  if (cursor != NULL)
+    cur = to_rgb (cursor);
+  ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &fg);
+  ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &bg);
+  ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, cursor != NULL ? &cur : NULL);
+  if (palette != NULL && palette_size > 0)
+    {
+      /* Start from the built-in palette, so a 16-colour theme keeps the
+       * 256-colour cube and greys. */
+      ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, NULL);
+      ghostty_terminal_get (self->terminal, GHOSTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT, colors);
+      for (gsize i = 0; i < MIN (palette_size, 256); i++)
+        colors[i] = to_rgb (&palette[i]);
+      ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, colors);
+    }
+  else
+    ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, NULL);
+  g_ptr_array_set_size (self->row_cache, 0);  /* resolved colours are cached per row */
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+static void
+apply_cursor_style (GtkGhosttyTerminal *self)
+{
+  GhosttyCursorStyle style = self->cursor_shape == GTK_GHOSTTY_CURSOR_SHAPE_IBEAM ? GHOSTTY_CURSOR_STYLE_BAR
+                             : self->cursor_shape == GTK_GHOSTTY_CURSOR_SHAPE_UNDERLINE ? GHOSTTY_CURSOR_STYLE_UNDERLINE
+                             : GHOSTTY_CURSOR_STYLE_BLOCK;
+  bool blink = self->cursor_blink;
+  ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE, &style);
+  ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK, &blink);
+  /* The defaults apply on a cursor-style reset (DECSCUSR 0); do one now. */
+  ghostty_terminal_vt_write (self->terminal, (const uint8_t *) "\x1b[0 q", 5);
+  flush_effects (self);
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+void
+gtk_ghostty_terminal_set_cursor_shape (GtkGhosttyTerminal *self, GtkGhosttyCursorShape shape)
+{
+  g_return_if_fail (GTK_GHOSTTY_IS_TERMINAL (self));
+  self->cursor_shape = shape;
+  apply_cursor_style (self);
+}
+
+GtkGhosttyCursorShape
+gtk_ghostty_terminal_get_cursor_shape (GtkGhosttyTerminal *self)
+{
+  g_return_val_if_fail (GTK_GHOSTTY_IS_TERMINAL (self), GTK_GHOSTTY_CURSOR_SHAPE_BLOCK);
+  return self->cursor_shape;
+}
+
+/**
+ * gtk_ghostty_terminal_set_cursor_blink:
+ * @self: the terminal
+ * @blink: whether the cursor blinks by default
+ *
+ * Recorded as the terminal's default; the widget does not animate the
+ * cursor yet.
+ */
+void
+gtk_ghostty_terminal_set_cursor_blink (GtkGhosttyTerminal *self, gboolean blink)
+{
+  g_return_if_fail (GTK_GHOSTTY_IS_TERMINAL (self));
+  self->cursor_blink = !!blink;
+  apply_cursor_style (self);
+}
+
+/**
+ * gtk_ghostty_terminal_set_scrollback_lines:
+ * @self: the terminal
+ * @lines: rows of history to keep (approximately: whole pages are pruned)
+ */
+void
+gtk_ghostty_terminal_set_scrollback_lines (GtkGhosttyTerminal *self, guint lines)
+{
+  size_t max_lines = lines, max_bytes = lines > 0 ? SIZE_MAX : 0;
+  g_return_if_fail (GTK_GHOSTTY_IS_TERMINAL (self));
+  ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &max_bytes);
+  if (lines > 0)
+    ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &max_lines);
+  update_adjustment (self);
+}
+
+/**
+ * gtk_ghostty_terminal_set_font_scale:
+ * @self: the terminal
+ * @scale: zoom factor applied to the font size (1.0 is the font's own)
+ */
+void
+gtk_ghostty_terminal_set_font_scale (GtkGhosttyTerminal *self, double scale)
+{
+  g_return_if_fail (GTK_GHOSTTY_IS_TERMINAL (self));
+  scale = CLAMP (scale, 0.25, 4.0);
+  if (scale == self->font_scale)
+    return;
+  self->font_scale = scale;
+  self->metrics_valid = FALSE;
+  gtk_widget_queue_resize (GTK_WIDGET (self));
+}
+
+double
+gtk_ghostty_terminal_get_font_scale (GtkGhosttyTerminal *self)
+{
+  g_return_val_if_fail (GTK_GHOSTTY_IS_TERMINAL (self), 1.0);
+  return self->font_scale;
+}
+
+/* ------------------------------------------------------------- search */
+
+/* The whole screen (history included) as plain text, one line per row. */
+static char **
+screen_lines (GtkGhosttyTerminal *self)
+{
+  GhosttyFormatter formatter = NULL;
+  bool no = false;
+  uint8_t *ptr = NULL;
+  size_t len = 0;
+  char *text, **lines;
+  if (ghostty_formatter_terminal_new (NULL, &formatter, self->terminal) != GHOSTTY_SUCCESS)
+    return g_new0 (char *, 1);
+  ghostty_formatter_set (formatter, GHOSTTY_FORMATTER_OPT_UNWRAP, &no);
+  ghostty_formatter_set (formatter, GHOSTTY_FORMATTER_OPT_TRIM, &no);
+  ghostty_formatter_format_alloc (formatter, NULL, &ptr, &len);
+  text = ptr != NULL ? g_strndup ((const char *) ptr, len) : g_strdup ("");
+  ghostty_free (NULL, ptr, len);
+  ghostty_formatter_free (formatter);
+  lines = g_strsplit (text, "\n", -1);
+  g_free (text);
+  return lines;
+}
+
+/* Cell column of byte offset @offset in @line, by the terminal's widths. */
+static int
+column_of (const char *line, int offset)
+{
+  glong n = 0;
+  gunichar *cps = g_utf8_to_ucs4_fast (line, offset, &n);
+  int column = 0;
+  for (glong i = 0; i < n;)
+    {
+      uint8_t width = 1;
+      size_t count = ghostty_unicode_grapheme_width ((const uint32_t *) cps + i, (size_t) (n - i), &width);
+      column += width;
+      i += count > 0 ? (glong) count : 1;
+    }
+  g_free (cps);
+  return column;
+}
+
+/**
+ * gtk_ghostty_terminal_search_set_pattern:
+ * @self: the terminal
+ * @pattern: (nullable): text to find, or %NULL to end the search
+ * @regex: whether @pattern is a regular expression (PCRE)
+ * @case_sensitive: whether case must match
+ *
+ * Returns: %FALSE when @pattern is not a valid regular expression (it is
+ *   then searched as plain text)
+ */
+gboolean
+gtk_ghostty_terminal_search_set_pattern (GtkGhosttyTerminal *self, const char *pattern, gboolean regex,
+                                         gboolean case_sensitive)
+{
+  GRegexCompileFlags flags = G_REGEX_OPTIMIZE | (case_sensitive ? 0 : G_REGEX_CASELESS);
+  gboolean valid = TRUE;
+  g_return_val_if_fail (GTK_GHOSTTY_IS_TERMINAL (self), FALSE);
+  g_clear_pointer (&self->search, g_regex_unref);
+  self->search_row = self->search_column = -1;
+  if (self->plain_search != NULL)
+    ghostty_search_set (self->plain_search, GHOSTTY_SEARCH_OPT_NEEDLE, NULL);
+  if (pattern == NULL || pattern[0] == '\0')
+    return TRUE;
+  if (!regex && !case_sensitive)
+    {
+      /* The common find bar: libghostty's own search, which follows
+       * history, the alternate screen and new output incrementally. Its
+       * matching ignores ASCII case only. */
+      GhosttyString needle = { (const uint8_t *) pattern, strlen (pattern) };
+      if (self->plain_search != NULL
+          || ghostty_search_new (NULL, &self->plain_search, self->terminal) == GHOSTTY_SUCCESS)
+        {
+          ghostty_search_set (self->plain_search, GHOSTTY_SEARCH_OPT_NEEDLE, &needle);
+          return TRUE;
+        }
+    }
+  if (regex)
+    self->search = g_regex_new (pattern, flags, 0, NULL);
+  if (self->search == NULL)
+    {
+      char *escaped = g_regex_escape_string (pattern, -1);
+      valid = !regex;
+      self->search = g_regex_new (escaped, flags, 0, NULL);
+      g_free (escaped);
+    }
+  return valid;
+}
+
+static gboolean
+select_hit (GtkGhosttyTerminal *self, int row, int start_column, int end_column)
+{
+  GhosttyPoint start = { GHOSTTY_POINT_TAG_SCREEN }, end = { GHOSTTY_POINT_TAG_SCREEN };
+  GhosttySelection selection = { 0 };
+  GhosttyTerminalScrollbar bar = { 0 };
+  start.value.coordinate.x = (uint16_t) MIN (start_column, (int) self->columns - 1);
+  start.value.coordinate.y = (uint32_t) row;
+  end.value.coordinate.x = (uint16_t) MIN (MAX (start_column, end_column - 1), (int) self->columns - 1);
+  end.value.coordinate.y = (uint32_t) row;
+  if (ghostty_terminal_grid_ref (self->terminal, start, &selection.start) != GHOSTTY_SUCCESS
+      || ghostty_terminal_grid_ref (self->terminal, end, &selection.end) != GHOSTTY_SUCCESS)
+    return FALSE;
+  set_selection (self, &selection);
+  /* Bring the row into view, centred, unless it already is. */
+  ghostty_terminal_get (self->terminal, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &bar);
+  if ((uint64_t) row < bar.offset || (uint64_t) row >= bar.offset + bar.len)
+    {
+      GhosttyTerminalScrollViewport behavior = { GHOSTTY_TERMINAL_SCROLL_VIEWPORT_ROW };
+      behavior.value.row = (size_t) MAX (0, row - (int) self->n_rows / 2);
+      scroll_viewport (self, behavior);
+    }
+  return TRUE;
+}
+
+/**
+ * gtk_ghostty_terminal_search_find:
+ * @self: the terminal
+ * @backwards: search towards older output
+ *
+ * Finds the next hit after (or before) the previous one, wrapping around,
+ * selects it and scrolls it into view.
+ *
+ * Returns: whether something was found
+ */
+gboolean
+gtk_ghostty_terminal_search_find (GtkGhosttyTerminal *self, gboolean backwards)
+{
+  char **lines;
+  int n, start_row, found_row = -1, found_start = 0, found_end = 0;
+  g_return_val_if_fail (GTK_GHOSTTY_IS_TERMINAL (self), FALSE);
+  if (self->search == NULL && self->plain_search != NULL)
+    {
+      GhosttySelection match = { 0 };
+      /* libghostty's "next" walks towards older output. */
+      if ((backwards ? ghostty_search_select_next (self->plain_search)
+                     : ghostty_search_select_prev (self->plain_search)) != GHOSTTY_SUCCESS
+          || ghostty_search_get (self->plain_search, GHOSTTY_SEARCH_DATA_SELECTED_MATCH, &match) != GHOSTTY_SUCCESS)
+        return FALSE;
+      set_selection (self, &match);
+      update_adjustment (self);  /* the search scrolled the viewport if needed */
+      return TRUE;
+    }
+  if (self->search == NULL)
+    return FALSE;
+  lines = screen_lines (self);
+  n = (int) g_strv_length (lines);
+  if (n == 0)
+    {
+      g_strfreev (lines);
+      return FALSE;
+    }
+  start_row = self->search_row >= 0 ? MIN (self->search_row, n - 1) : (backwards ? n - 1 : 0);
+  for (int step = 0; step <= n && found_row < 0; step++)
+    {
+      int row = backwards ? (start_row - step + n) % n : (start_row + step) % n;
+      GMatchInfo *match = NULL;
+      int best_start = -1, best_end = -1;
+      g_regex_match (self->search, lines[row], 0, &match);
+      while (g_match_info_matches (match))
+        {
+          int s, e, column;
+          g_match_info_fetch_pos (match, 0, &s, &e);
+          if (e > s)
+            {
+              column = column_of (lines[row], s);
+              gboolean after = step > 0 || self->search_row < 0 || column > self->search_column;
+              gboolean before = step > 0 || self->search_row < 0 || column < self->search_column;
+              if (!backwards && after)
+                {
+                  best_start = s;
+                  best_end = e;
+                  break;
+                }
+              if (backwards && before)
+                {
+                  best_start = s;
+                  best_end = e;  /* keep going: the last one before wins */
+                }
+            }
+          g_match_info_next (match, NULL);
+        }
+      g_match_info_free (match);
+      if (best_start >= 0)
+        {
+          found_row = row;
+          found_start = column_of (lines[row], best_start);
+          found_end = column_of (lines[row], best_end);
+        }
+    }
+  g_strfreev (lines);
+  if (found_row < 0)
+    return FALSE;
+  self->search_row = found_row;
+  self->search_column = found_start;
+  return select_hit (self, found_row, found_start, found_end);
+}
+
+/* -------------------------------------------------------------- links */
+
+/**
+ * gtk_ghostty_terminal_hyperlink_at:
+ * @self: the terminal
+ * @x: widget x
+ * @y: widget y
+ *
+ * Returns: (transfer full) (nullable): the OSC 8 link of the cell under
+ *   (@x, @y), or %NULL
+ */
+char *
+gtk_ghostty_terminal_hyperlink_at (GtkGhosttyTerminal *self, double x, double y)
+{
+  GhosttyGridRef ref;
+  char buf[512];
+  size_t length = 0;
+  GhosttyResult result;
+  g_return_val_if_fail (GTK_GHOSTTY_IS_TERMINAL (self), NULL);
+  if (!viewport_ref (self, x, y, &ref))
+    return NULL;
+  result = ghostty_grid_ref_hyperlink_uri (&ref, (uint8_t *) buf, sizeof buf, &length);
+  if (result == GHOSTTY_OUT_OF_SPACE && length <= 65536)
+    {
+      char *big = g_malloc (length);
+      char *uri = NULL;
+      if (ghostty_grid_ref_hyperlink_uri (&ref, (uint8_t *) big, length, &length) == GHOSTTY_SUCCESS && length > 0)
+        uri = g_strndup (big, length);
+      g_free (big);
+      return uri;
+    }
+  return result == GHOSTTY_SUCCESS && length > 0 ? g_strndup (buf, length) : NULL;
+}
+
+/**
+ * gtk_ghostty_terminal_get_line_at:
+ * @self: the terminal
+ * @x: widget x
+ * @y: widget y
+ * @column: (out): the cell column under @x
+ *
+ * For finding plain-text links: the text of the row under (@x, @y).
+ *
+ * Returns: (transfer full): the row's text
+ */
+char *
+gtk_ghostty_terminal_get_line_at (GtkGhosttyTerminal *self, double x, double y, guint *column)
+{
+  GhosttyTerminalScrollbar bar = { 0 };
+  char **lines, *text;
+  guint cell_column, viewport_row;
+  guint64 row;
+  g_return_val_if_fail (GTK_GHOSTTY_IS_TERMINAL (self), NULL);
+  viewport_cell (self, x, y, &cell_column, &viewport_row);
+  if (column != NULL)
+    *column = cell_column;
+  ghostty_terminal_get (self->terminal, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &bar);
+  row = bar.offset + viewport_row;
+  lines = screen_lines (self);
+  text = row < g_strv_length (lines) ? g_strdup (lines[row]) : g_strdup ("");
+  g_strfreev (lines);
+  return text;
 }
 
 /**
@@ -1946,7 +2374,7 @@ gtk_ghostty_terminal_scroll_to_bottom (GtkGhosttyTerminal *self)
  * gtk_ghostty_terminal_get_text:
  * @self: the terminal
  *
- * Returns: (transfer full): the visible screen as plain text
+ * Returns: (transfer full): the screen and its history as plain text
  */
 char *
 gtk_ghostty_terminal_get_text (GtkGhosttyTerminal *self)
@@ -2185,6 +2613,8 @@ gtk_ghostty_terminal_finalize (GObject *object)
   g_free (self->title);
   g_free (self->preedit);
   g_clear_pointer (&self->preedit_attrs, pango_attr_list_unref);
+  g_clear_pointer (&self->search, g_regex_unref);
+  g_clear_pointer (&self->plain_search, ghostty_search_free);
   g_clear_pointer (&self->font, pango_font_description_free);
   for (int bold = 0; bold < 2; bold++)
     for (int italic = 0; italic < 2; italic++)
@@ -2266,6 +2696,20 @@ gtk_ghostty_terminal_class_init (GtkGhosttyTerminalClass *klass)
    */
   signals[SIGNAL_BELL] = g_signal_new ("bell", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_LAST,
                                        0, NULL, NULL, NULL, G_TYPE_NONE, 0);
+  /**
+   * GtkGhosttyTerminal::contents-changed:
+   * @self: the terminal
+   *
+   * Emitted after fed output was processed.
+   */
+  signals[SIGNAL_CONTENTS_CHANGED] = g_signal_new ("contents-changed", G_TYPE_FROM_CLASS (klass),
+                                                   G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL, G_TYPE_NONE, 0);
+  /**
+   * GtkGhosttyTerminal::selection-changed:
+   * @self: the terminal
+   */
+  signals[SIGNAL_SELECTION_CHANGED] = g_signal_new ("selection-changed", G_TYPE_FROM_CLASS (klass),
+                                                    G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL, G_TYPE_NONE, 0);
 
   gtk_widget_class_set_css_name (widget_class, "ghostty-terminal");
   gtk_widget_class_set_accessible_role (widget_class, GTK_ACCESSIBLE_ROLE_TERMINAL);
@@ -2281,6 +2725,8 @@ gtk_ghostty_terminal_init (GtkGhosttyTerminal *self)
   self->columns = DEFAULT_COLUMNS;
   self->n_rows = DEFAULT_ROWS;
   self->pull_history_on_grow = TRUE;
+  self->font_scale = 1.0;
+  self->search_row = self->search_column = -1;
   self->pending_reply = g_byte_array_new ();
   self->row_cache = g_ptr_array_new_with_free_func (row_free);
   self->font = pango_font_description_from_string (DEFAULT_FONT);
@@ -2289,6 +2735,17 @@ gtk_ghostty_terminal_init (GtkGhosttyTerminal *self)
     g_error ("ghostty_terminal_new failed");
   ghostty_render_state_new (NULL, &self->render_state);
   ghostty_render_state_row_iterator_new (NULL, &self->rows);
+  {
+    /* Register the renderer's fallback colours as the terminal's defaults,
+     * so colour queries are answered from the start. */
+    GhosttyRenderStateColors colors = GHOSTTY_INIT_SIZED (GhosttyRenderStateColors);
+    ghostty_render_state_update (self->render_state, self->terminal);
+    ghostty_render_state_get (self->render_state, GHOSTTY_RENDER_STATE_DATA_COLORS, &colors);
+    self->builtin_fg = colors.foreground;
+    self->builtin_bg = colors.background;
+    ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &self->builtin_fg);
+    ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &self->builtin_bg);
+  }
   ghostty_render_state_row_cells_new (NULL, &self->cells);
   ghostty_key_encoder_new (NULL, &self->key_encoder);
   ghostty_mouse_encoder_new (NULL, &self->mouse_encoder);

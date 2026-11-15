@@ -15,6 +15,25 @@
 
 G_BEGIN_DECLS
 
+/**
+ * GtkGhosttyCursorShape:
+ * @GTK_GHOSTTY_CURSOR_SHAPE_BLOCK: a filled cell
+ * @GTK_GHOSTTY_CURSOR_SHAPE_IBEAM: a vertical bar
+ * @GTK_GHOSTTY_CURSOR_SHAPE_UNDERLINE: a line under the cell
+ *
+ * The default cursor shape; programs can change it (DECSCUSR).
+ */
+typedef enum
+{
+  GTK_GHOSTTY_CURSOR_SHAPE_BLOCK,
+  GTK_GHOSTTY_CURSOR_SHAPE_IBEAM,
+  GTK_GHOSTTY_CURSOR_SHAPE_UNDERLINE,
+} GtkGhosttyCursorShape;
+
+#define GTK_GHOSTTY_TYPE_CURSOR_SHAPE (gtk_ghostty_cursor_shape_get_type ())
+GTK_GHOSTTY_API
+GType gtk_ghostty_cursor_shape_get_type (void);
+
 #define GTK_GHOSTTY_TYPE_TERMINAL (gtk_ghostty_terminal_get_type ())
 GTK_GHOSTTY_API
 G_DECLARE_FINAL_TYPE (GtkGhosttyTerminal, gtk_ghostty_terminal, GTK_GHOSTTY, TERMINAL, GtkWidget)
@@ -57,6 +76,50 @@ void        gtk_ghostty_terminal_scroll_lines       (GtkGhosttyTerminal         
                                                      int                         lines);
 GTK_GHOSTTY_API
 void        gtk_ghostty_terminal_scroll_to_bottom   (GtkGhosttyTerminal         *self);
+
+GTK_GHOSTTY_API
+void        gtk_ghostty_terminal_set_colors         (GtkGhosttyTerminal         *self,
+                                                     const GdkRGBA              *foreground,
+                                                     const GdkRGBA              *background,
+                                                     const GdkRGBA              *cursor,
+                                                     const GdkRGBA              *palette,
+                                                     gsize                       palette_size);
+GTK_GHOSTTY_API
+void        gtk_ghostty_terminal_set_cursor_shape   (GtkGhosttyTerminal         *self,
+                                                     GtkGhosttyCursorShape       shape);
+GTK_GHOSTTY_API
+GtkGhosttyCursorShape
+            gtk_ghostty_terminal_get_cursor_shape   (GtkGhosttyTerminal         *self);
+GTK_GHOSTTY_API
+void        gtk_ghostty_terminal_set_cursor_blink   (GtkGhosttyTerminal         *self,
+                                                     gboolean                    blink);
+GTK_GHOSTTY_API
+void        gtk_ghostty_terminal_set_scrollback_lines (GtkGhosttyTerminal       *self,
+                                                       guint                     lines);
+GTK_GHOSTTY_API
+void        gtk_ghostty_terminal_set_font_scale     (GtkGhosttyTerminal         *self,
+                                                     double                      scale);
+GTK_GHOSTTY_API
+double      gtk_ghostty_terminal_get_font_scale     (GtkGhosttyTerminal         *self);
+
+GTK_GHOSTTY_API
+gboolean    gtk_ghostty_terminal_search_set_pattern (GtkGhosttyTerminal         *self,
+                                                     const char                 *pattern,
+                                                     gboolean                    regex,
+                                                     gboolean                    case_sensitive);
+GTK_GHOSTTY_API
+gboolean    gtk_ghostty_terminal_search_find        (GtkGhosttyTerminal         *self,
+                                                     gboolean                    backwards);
+
+GTK_GHOSTTY_API
+char       *gtk_ghostty_terminal_hyperlink_at       (GtkGhosttyTerminal         *self,
+                                                     double                      x,
+                                                     double                      y);
+GTK_GHOSTTY_API
+char       *gtk_ghostty_terminal_get_line_at        (GtkGhosttyTerminal         *self,
+                                                     double                      x,
+                                                     double                      y,
+                                                     guint                      *column);
 
 GTK_GHOSTTY_API
 guint       gtk_ghostty_terminal_get_columns        (GtkGhosttyTerminal         *self);

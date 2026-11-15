@@ -12,7 +12,7 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("GtkGhostty", "1")
-from gi.repository import GLib, Gtk, GtkGhostty  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk, GtkGhostty  # noqa: E402
 
 Gtk.init()
 
@@ -189,3 +189,121 @@ def test_size_version_and_colour_scheme_queries_are_answered():
     assert replies[2] == b"\x1b[?997;1n"  # dark: the default background is black
     term.feed_data(b"\x1b]11;#ffffff\x1b\\\x1b[?996n")
     assert replies[-1] == b"\x1b[?997;2n"  # light once the program sets a white background
+
+
+def _osc_colour(term, number):
+    replies = []
+    handler = term.connect("reply", lambda _t, data: replies.append(data.get_data()))
+    term.feed_data(b"\x1b]%d;?\x1b\\" % number)
+    term.disconnect(handler)
+    return replies[-1] if replies else None
+
+
+def _rgba(spec):
+    colour = Gdk.RGBA()
+    assert colour.parse(spec)
+    return colour
+
+
+def test_theme_colours_are_the_defaults_programs_see():
+    term = make()
+    palette = [_rgba("#%02x0000" % n) for n in range(16)]
+    term.set_colors(_rgba("#112233"), _rgba("#fafafa"), _rgba("#ff0000"), palette)
+    assert _osc_colour(term, 10).startswith(b"\x1b]10;rgb:1111/2222/3333")
+    assert _osc_colour(term, 11).startswith(b"\x1b]11;rgb:fafa/fafa/fafa")
+    replies = []
+    term.connect("reply", lambda _t, data: replies.append(data.get_data()))
+    term.feed_data(b"\x1b]4;3;?\x1b\\\x1b]4;100;?\x1b\\")
+    answer = b"".join(replies)  # replies to one write come out together
+    assert answer.startswith(b"\x1b]4;3;rgb:0303/0000/0000")
+    assert b"\x1b]4;100;rgb:" in answer
+    assert b"\x1b]4;100;rgb:0000/0000/0000" not in answer  # 256-colour cube kept
+    term.feed_data(b"\x1b[?996n")
+    assert replies[-1] == b"\x1b[?997;2n"  # a light theme reads as light
+    term.set_colors(None, None, None, None)
+    assert _osc_colour(term, 11).startswith(b"\x1b]11;rgb:0000/0000/0000")
+
+
+def test_cursor_scrollback_and_font_scale_settings():
+    term = make(20, 4)
+    term.set_cursor_shape(GtkGhostty.CursorShape.IBEAM)
+    term.set_cursor_blink(True)
+    assert term.get_cursor_shape() == GtkGhostty.CursorShape.IBEAM
+    term.set_font_scale(1.5)
+    assert term.get_font_scale() == 1.5
+    term.set_font_scale(100)
+    assert term.get_font_scale() == 4.0
+    term.set_scrollback_lines(50)
+    term.feed_data(b"".join(b"line%d\r\n" % n for n in range(5000)))
+    kept = len(lines(term))
+    assert 50 <= kept < 2000, kept  # pruned by whole pages, so about 50
+
+
+def _selected_after_find(term, backwards=False):
+    assert term.search_find(backwards)
+    return term.get_selected_text()
+
+
+def test_plain_search_walks_history_with_libghostty():
+    term = make(30, 4)
+    term.feed_data(b"".join(b"row%02d %s\r\n" % (n, b"ERROR" if n % 10 == 3 else b"ok") for n in range(40)))
+    selected = []
+    term.connect("selection-changed", lambda _t: selected.append(True))
+    assert term.search_set_pattern("error", False, False)
+    assert _selected_after_find(term, backwards=True) == "ERROR"  # newest first
+    assert term.search_find(True) and term.search_find(True)
+    assert selected
+    assert term.search_set_pattern(None, False, False)
+    assert not term.search_find(False)
+
+
+def test_regex_and_case_sensitive_search_select_the_match():
+    term = make(30, 4)
+    term.feed_data(b"".join(b"row%02d %s\r\n" % (n, b"Error 42" if n == 7 else b"error 1") for n in range(30)))
+    assert term.search_set_pattern("Error", False, True)
+    assert _selected_after_find(term) == "Error"
+    assert term.search_set_pattern(r"Error \d+", True, False)
+    assert _selected_after_find(term) in ("error 1", "Error 42")
+    assert not term.search_set_pattern("(unclosed", True, False)  # searched as text instead
+    assert not term.search_find(False)
+
+
+def test_links_and_line_text_under_the_pointer():
+    term = make(40, 4)
+    term.feed_data(b"see \x1b]8;;https://example.org/x\x1b\\here\x1b]8;;\x1b\\ and https://plain.example\r\n")
+    contents = []
+    term.connect("contents-changed", lambda _t: contents.append(True))
+    term.feed_data(b"\x1b[s\x1b[u")
+    assert contents
+    # Cell metrics come from the font: find the link by scanning the row.
+    found = None
+    for x in range(0, 400, 2):
+        found = term.hyperlink_at(x, 2)
+        if found:
+            break
+    assert found == "https://example.org/x"
+    text, column = term.get_line_at(1, 2)
+    assert text.startswith("see here and https://plain.example") and column == 0
+
+
+def test_a_new_terminal_answers_colour_queries():
+    term = make()
+    for number in (10, 11):
+        assert _osc_colour(term, number).startswith(b"\x1b]%d;rgb:" % number)
+    term.feed_data(b"\x1bc")  # a full reset keeps the defaults
+    assert _osc_colour(term, 11).startswith(b"\x1b]11;rgb:")
+
+
+def test_a_search_hit_in_history_scrolls_into_view():
+    for regex in (False, True):
+        term = make(20, 5)
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_child(term)
+        term.set_grid_size(20, 5)
+        term.feed_data(b"needle at the top\r\n" + b"".join(b"line%d\r\n" % n for n in range(100)))
+        adjustment = scrolled.get_vadjustment()
+        bottom = adjustment.get_value()
+        assert term.search_set_pattern("needle", regex, False)
+        assert term.search_find(True)
+        assert term.get_selected_text() == "needle"
+        assert adjustment.get_value() < bottom - 50, (regex, adjustment.get_value())
