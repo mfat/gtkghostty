@@ -2,7 +2,7 @@
 
 A GTK 4 terminal widget on [libghostty-vt](https://lib.ghostty.org/vt/), Ghostty's terminal
 core. Written in C, usable from any GObject language, on Linux, macOS and Windows.
-[SSH Pilot](https://github.com/mfat/sshpilot) uses it.
+Used by [SSH Pilot](https://github.com/mfat/sshpilot).
 
 - Ghostty's emulation, scrollback, selection and search
 - Kitty and legacy keyboard protocols, input methods, mouse reporting
