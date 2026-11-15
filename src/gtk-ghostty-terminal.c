@@ -150,6 +150,7 @@ G_DEFINE_FINAL_TYPE_WITH_CODE (GtkGhosttyTerminal, gtk_ghostty_terminal, GTK_TYP
 
 static void update_adjustment (GtkGhosttyTerminal *self);
 static void scroll_to_bottom (GtkGhosttyTerminal *self);
+static gboolean is_grid_symbol (gunichar c);
 
 /* ------------------------------------------------------------------ rows */
 
@@ -547,7 +548,7 @@ build_row (GtkGhosttyTerminal *self, const GdkRGBA *fg_default, const GdkRGBA *b
       else
         {
           gunichar c = g_utf8_get_char_validated (owned, len);
-          if (g_utf8_strlen (owned, len) == 1 && gtk_ghostty_box_glyph (c) != NULL)
+          if (g_utf8_strlen (owned, len) == 1 && is_grid_symbol (c))
             {
               close_run (self, row, &run);
               g_array_append_val (row->boxes, ((BoxCell) { x, c, fg }));
@@ -645,6 +646,170 @@ draw_box (GtkSnapshot *snapshot, const GtkGhosttyBoxGlyph *glyph, const GdkRGBA 
             }
         }
     }
+}
+
+/* ----------------------------------------------------- grid symbols */
+
+/* Characters drawn on the cell grid instead of by the font, so neighbours
+ * join without gaps whatever font is installed: box drawing and block
+ * elements (the generated tables), Powerline separators, braille and
+ * sextants. */
+
+static gboolean
+is_braille (gunichar c)
+{
+  return c >= 0x2800 && c <= 0x28FF;
+}
+
+static gboolean
+is_sextant (gunichar c)
+{
+  return c >= 0x1FB00 && c <= 0x1FB3B;
+}
+
+static gboolean
+is_powerline (gunichar c)
+{
+  return c >= 0xE0B0 && c <= 0xE0BF;
+}
+
+static gboolean
+is_grid_symbol (gunichar c)
+{
+  return gtk_ghostty_box_glyph (c) != NULL || is_braille (c) || is_sextant (c) || is_powerline (c);
+}
+
+static void
+fill_path (GtkSnapshot *snapshot, GskPathBuilder *builder, const GdkRGBA *color)
+{
+  GskPath *path = gsk_path_builder_free_to_path (builder);
+  gtk_snapshot_append_fill (snapshot, path, GSK_FILL_RULE_WINDING, color);
+  gsk_path_unref (path);
+}
+
+static void
+stroke_path (GtkSnapshot *snapshot, GskPathBuilder *builder, const GdkRGBA *color, float width)
+{
+  GskPath *path = gsk_path_builder_free_to_path (builder);
+  GskStroke *stroke = gsk_stroke_new (width);
+  gtk_snapshot_append_stroke (snapshot, path, stroke, color);
+  gsk_stroke_free (stroke);
+  gsk_path_unref (path);
+}
+
+/* Braille: dots 1-3 and 7 down the left column, 4-6 and 8 down the right. */
+static void
+draw_braille (GtkSnapshot *snapshot, gunichar c, const GdkRGBA *color, int x, int y, int w, int h)
+{
+  static const int column[8] = { 0, 0, 0, 1, 1, 1, 0, 1 };
+  static const int row[8] = { 0, 1, 2, 0, 1, 2, 3, 3 };
+  guint bits = c - 0x2800;
+  float dot = MAX (1.f, MIN (w / 4.f, h / 8.f));
+  for (int i = 0; i < 8; i++)
+    if (bits & (1u << i))
+      {
+        float cx = x + w * (column[i] ? 0.72f : 0.28f);
+        float cy = y + h * (0.125f + row[i] * 0.25f);
+        GskPathBuilder *builder = gsk_path_builder_new ();
+        gsk_path_builder_add_circle (builder, &GRAPHENE_POINT_INIT (cx, cy), dot / 2 + 0.25f);
+        fill_path (snapshot, builder, color);
+      }
+}
+
+/* Sextants: 2x3 blocks. U+1FB00.. enumerate the patterns 1..62 without the
+ * two that are the left and right half blocks (21 and 42). */
+static void
+draw_sextant (GtkSnapshot *snapshot, gunichar c, const GdkRGBA *color, int x, int y, int w, int h)
+{
+  guint pattern = c - 0x1FB00 + 1;
+  if (pattern >= 21)
+    pattern++;
+  if (pattern >= 42)
+    pattern++;
+  for (int i = 0; i < 6; i++)
+    if (pattern & (1u << i))
+      {
+        int col = i % 2, rw = i / 2;
+        int x1 = x + (col ? w / 2 : 0), x2 = x + (col ? w : w / 2);
+        int y1 = y + (rw * h + 1) / 3, y2 = y + ((rw + 1) * h + 1) / 3;
+        append_rect (snapshot, color, x1, y1, x2 - x1, y2 - y1);
+      }
+}
+
+/* Powerline separators: solid and thin triangles, half circles and slants. */
+static void
+draw_powerline (GtkSnapshot *snapshot, gunichar c, const GdkRGBA *color, int x, int y, int w, int h)
+{
+  GskPathBuilder *b = gsk_path_builder_new ();
+  float l = (float) x, r = (float) (x + w), t = (float) y, bo = (float) (y + h), m = y + h / 2.f;
+  float thin = MAX (1.f, h / 16.f);
+  gboolean solid = (c - 0xE0B0) % 2 == 0;
+  switch (c)
+    {
+    case 0xE0B0: case 0xE0B1:  /* right-pointing triangle */
+      gsk_path_builder_move_to (b, l, t);
+      gsk_path_builder_line_to (b, r, m);
+      gsk_path_builder_line_to (b, l, bo);
+      break;
+    case 0xE0B2: case 0xE0B3:  /* left-pointing triangle */
+      gsk_path_builder_move_to (b, r, t);
+      gsk_path_builder_line_to (b, l, m);
+      gsk_path_builder_line_to (b, r, bo);
+      break;
+    case 0xE0B4: case 0xE0B5:  /* right half circle */
+      gsk_path_builder_move_to (b, l, t);
+      gsk_path_builder_cubic_to (b, r, t, r, bo, l, bo);
+      break;
+    case 0xE0B6: case 0xE0B7:  /* left half circle */
+      gsk_path_builder_move_to (b, r, t);
+      gsk_path_builder_cubic_to (b, l, t, l, bo, r, bo);
+      break;
+    case 0xE0B8: case 0xE0B9:  /* lower-left triangle / backslash */
+      gsk_path_builder_move_to (b, l, t);
+      gsk_path_builder_line_to (b, r, bo);
+      if (solid)
+        gsk_path_builder_line_to (b, l, bo);
+      break;
+    case 0xE0BA: case 0xE0BB:  /* lower-right triangle / slash */
+      gsk_path_builder_move_to (b, r, t);
+      gsk_path_builder_line_to (b, l, bo);
+      if (solid)
+        gsk_path_builder_line_to (b, r, bo);
+      break;
+    case 0xE0BC: case 0xE0BD:  /* upper-left triangle / slash */
+      gsk_path_builder_move_to (b, l, bo);
+      gsk_path_builder_line_to (b, r, t);
+      if (solid)
+        gsk_path_builder_line_to (b, l, t);
+      break;
+    default:  /* 0xE0BE, 0xE0BF: upper-right triangle / backslash */
+      gsk_path_builder_move_to (b, l, t);
+      gsk_path_builder_line_to (b, r, bo);
+      if (solid)
+        gsk_path_builder_line_to (b, r, t);
+      break;
+    }
+  if (solid)
+    {
+      gsk_path_builder_close (b);
+      fill_path (snapshot, b, color);
+    }
+  else
+    stroke_path (snapshot, b, color, thin);
+}
+
+static void
+draw_symbol (GtkSnapshot *snapshot, gunichar c, const GdkRGBA *color, int x, int y, int w, int h)
+{
+  const GtkGhosttyBoxGlyph *glyph = gtk_ghostty_box_glyph (c);
+  if (glyph != NULL)
+    draw_box (snapshot, glyph, color, x, y, w, h);
+  else if (is_braille (c))
+    draw_braille (snapshot, c, color, x, y, w, h);
+  else if (is_sextant (c))
+    draw_sextant (snapshot, c, color, x, y, w, h);
+  else if (is_powerline (c))
+    draw_powerline (snapshot, c, color, x, y, w, h);
 }
 
 static void
@@ -894,9 +1059,9 @@ draw_cursor (GtkGhosttyTerminal *self, GtkSnapshot *snapshot, const GhosttyRende
       if ((guint) x < row->chars->len)
         {
           const char *text = g_ptr_array_index (row->chars, x);
-          const GtkGhosttyBoxGlyph *glyph = text[0] ? gtk_ghostty_box_glyph (g_utf8_get_char (text)) : NULL;
-          if (glyph != NULL)
-            draw_box (snapshot, glyph, bg_default, x * cw, y * ch, cw, ch);
+          gunichar symbol = text[0] ? g_utf8_get_char (text) : 0;
+          if (symbol != 0 && is_grid_symbol (symbol))
+            draw_symbol (snapshot, symbol, bg_default, x * cw, y * ch, cw, ch);
           else if (text[0])
             {
               PangoLayout *layout = pango_layout_new (gtk_widget_get_pango_context (GTK_WIDGET (self)));
@@ -968,7 +1133,7 @@ gtk_ghostty_terminal_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
       for (guint i = 0; i < row->boxes->len; i++)
         {
           BoxCell *box = &g_array_index (row->boxes, BoxCell, i);
-          draw_box (snapshot, gtk_ghostty_box_glyph (box->c), &box->fg, box->x * cw, (int) y * ch, cw, ch);
+          draw_symbol (snapshot, box->c, &box->fg, box->x * cw, (int) y * ch, cw, ch);
         }
       for (guint i = 0; i < row->runs->len; i++)
         {

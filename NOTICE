@@ -29,7 +29,9 @@ Design references (no code copied)
 Kwi (https://invent.kde.org/utilities/kwi, mirror https://github.com/KDE/kwi)
   at f2810b4, LGPL-2.1-only OR LGPL-3.0-only OR LicenseRef-KDE-Accepted-LGPL.
   The input-method preedit layout follows the design of Kwi's
-  PreeditLayout.cpp, and its tests follow the cases in imetest.cpp.
+  PreeditLayout.cpp, and its tests follow the cases in imetest.cpp. The
+  set of characters drawn on the cell grid (Powerline, braille, sextants)
+  follows the scope of Kwi's Symbols.cpp; the drawing code is original.
   Kwi's code is C++/Qt and is not copied; its licence differs from
   gtkghostty's "or later", so it is used as a design reference only.
 
