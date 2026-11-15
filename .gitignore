@@ -1,13 +1,14 @@
-/references/
-/libghostty-downloads/
+# Build trees (meson, packaging/windows/build-gvsbuild.ps1) and outputs
+/_build*/
+/_win/
+/_venv/
 /build/
+/gtkghostty-*-gvsbuild-*.zip*
 *.o
 *.so
 *.dll
 *.dylib
 *.typelib
 *.gir
-/_build/
-/_deps/
 __pycache__/
 .pytest_cache/
