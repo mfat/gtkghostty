@@ -17,6 +17,7 @@ glue that is genuinely left. "Verified" means run and observed, not read; everyt
 | [pyghostty](https://pypi.org/project/pyghostty/) | 0.1.4 wheel | Apache-2.0 | cffi binding over a bundled `libghostty-vt` | Inspected only |
 | [PrettyMux](https://github.com/patcito/prettymux) | `137915d` | GPL-3.0-only | C/GObject `GtkWidget` around Ghostty's internal `ghostty_surface_t` | No |
 | [Ghostling](https://github.com/ghostty-org/ghostling) | `63842bf` | MIT | Ghostty's own minimal libghostty-vt terminal in one C file (Raylib) | No; read only. Pinned to a pre-1.0 Ghostty commit (`f64f4ac`), so function names differ from 1.0 (`*_setopt_from_terminal`) |
+| [Kwi](https://github.com/KDE/kwi) | `f2810b4` | LGPL-2.1-only OR LGPL-3.0-only OR KDE-accepted LGPL (libs) | KDE terminal and embeddable Qt Quick component on **libghostty-vt 1.0.1+**: the closest reference to gtkghostty | No; read only. **Design reference only** (its licence is not "or later" and its code is C++/Qt): preedit layout, accessibility (logical text, row-identity diffing), symbols, search |
 | [Roost](https://github.com/charliek/roost) | `e49d9d2d` | MIT | Rust/iced terminal, `roost-vt` wrapper over libghostty-vt | No |
 | [Blueshell](https://github.com/tuna-os/blueshell) | `0234dde6e` (ptyxis-port) | MIT core, GPL agent | Fork of the Ghostty GTK application | No |
 
@@ -91,7 +92,7 @@ technique in C (licence permits, attribute it). **Study**: design reference only
 |---|---|---|---|---|
 | Key encoding (legacy, kitty) | libghostty-vt | `ghostty_key_encoder_*`, `_setopt_from_terminal` | **Use** | Plus a **legacy-only** property for ConPTY transports (finding 4) |
 | GDK keyval → `GhosttyKey` table | tilix2 `KEYMAP`, `base_keyval`, `ghostty_mods` | tilix2.py 43–90 | **Port** | Platform checks: Windows AltGr arrives as Ctrl+Alt (SSH Pilot handles it in `_on_key_pressed`) |
-| IME, dead keys, compose | GTK `GtkIMMulticontext` | tilix2 `Win._im_commit`; PrettyMux (study) | **Port** (tilix2) | Preedit drawing at the cursor and cursor-location reporting are not in tilix2 |
+| IME, dead keys, compose | GTK `GtkIMMulticontext` | tilix2 `Win._im_commit`; Kwi `PreeditLayout.cpp`, `imetest.cpp` | **Port** (tilix2) for commit; **Study** (Kwi) for preedit | Preedit drawn as cells from the cursor with libghostty grapheme widths, wrapped and shifted up, IM styling kept, caret snapped to clusters, hidden while scrolled back (Kwi's design) |
 | Mouse reporting | libghostty-vt | `ghostty_mouse_encoder_*` | **Use** | Gestures → events; Shift bypass for selection (tilix2 `_mouse_to_app`) |
 | Focus reports | libghostty-vt | `ghostty_focus_encode` | **Use** | — |
 | Wheel in alternate screen (mode 1007) | libghostty-vt mode + encoder | — | **Use** | — |
@@ -114,7 +115,7 @@ technique in C (licence permits, attribute it). **Study**: design reference only
 | GIR / typelib | — | — | **New** | `gnome.generate_gir()` |
 | Building libghostty-vt for Windows | SSH Pilot `packaging/windows/libghostty-vt/build.py` | pinned Zig + release, offline | **Port** (relicensed, see note) | Verified: 2.5 MB DLL importing only system DLLs, loads in python.org Python next to gvsbuild GTK |
 | Upstream tracking | Blueshell `UPSTREAM_SYNC.md` | — | **Study** | Only needed if we ever patch Ghostty; the stable ABI avoids that |
-| Accessibility | Ghostty GTK; Kwi `TerminalAccessible.cpp` (LGPL) | — | **Study** | `GtkAccessibleText` (GTK ≥ 4.14) from formatter text; not in tilix2 |
+| Accessibility | Kwi `TerminalAccessible.cpp`, `accessibilitytest.cpp` | — | **Study** | `GtkAccessibleText` (GTK ≥ 4.14): logical lines (soft wraps joined), viewport scope, row identities (with text fallback) to tell scrolling from new output; Kwi's 7 tests as the checklist |
 
 ## Measured numbers carried forward
 

@@ -23,6 +23,19 @@ tilix2 (https://github.com/markuman/tilix2) at 65d775b, WTFPL v2.
   cell grid, wide cells scaled to two cells, box drawing on the grid) are
   ported from tilix2.py.
 
+Design references (no code copied)
+----------------------------------
+
+Kwi (https://invent.kde.org/utilities/kwi, mirror https://github.com/KDE/kwi)
+  at f2810b4, LGPL-2.1-only OR LGPL-3.0-only OR LicenseRef-KDE-Accepted-LGPL.
+  The input-method preedit layout follows the design of Kwi's
+  PreeditLayout.cpp, and its tests follow the cases in imetest.cpp.
+  Kwi's code is C++/Qt and is not copied; its licence differs from
+  gtkghostty's "or later", so it is used as a design reference only.
+
+Ghostling (https://github.com/ghostty-org/ghostling) at 63842bf, MIT.
+  The list of terminal effects to answer (size, XTVERSION, colour scheme).
+
 Libraries
 ---------
 

@@ -93,6 +93,12 @@ struct _GtkGhosttyTerminal
   gboolean pull_history_on_grow;
   gboolean focused;
 
+  /* Input-method composition (preedit), drawn at the cursor. */
+  char *preedit;
+  PangoAttrList *preedit_attrs;
+  int preedit_cursor;           /* in characters */
+  GdkRectangle im_location;     /* last caret rectangle told to the IM */
+
   /* GtkScrollable: the vertical adjustment mirrors libghostty's scrollbar. */
   GtkAdjustment *hadjustment, *vadjustment;
   GtkScrollablePolicy hscroll_policy, vscroll_policy;
@@ -652,6 +658,206 @@ draw_layout (GtkSnapshot *snapshot, PangoLayout *layout, const GdkRGBA *color, d
   gtk_snapshot_restore (snapshot);
 }
 
+/* ------------------------------------------------------------- preedit */
+
+/* The composition an input method is showing, laid out as cells from the
+ * terminal cursor: grapheme widths from libghostty (the same rules the
+ * terminal applies when the text is committed), wrapped at the right edge,
+ * shifted up when it would leave the bottom, and hidden while the cursor
+ * is scrolled out of view. The layout follows Kwi's PreeditLayout design
+ * (see NOTICE). */
+
+typedef struct
+{
+  int x, y, width;
+  int byte_start, byte_end;     /* into self->preedit */
+} PreeditCell;
+
+typedef struct
+{
+  GdkRGBA fg, bg;
+  gboolean bold;
+  PangoUnderline underline;
+} PreeditStyle;
+
+static PreeditStyle
+preedit_style (GtkGhosttyTerminal *self, int start, int end, const GdkRGBA *fg, const GdkRGBA *bg)
+{
+  PreeditStyle style = { *fg, *bg, FALSE, PANGO_UNDERLINE_SINGLE };
+  GSList *attributes;
+  if (self->preedit_attrs == NULL)
+    return style;
+  attributes = pango_attr_list_get_attributes (self->preedit_attrs);
+  for (GSList *l = attributes; l != NULL; l = l->next)
+    {
+      PangoAttribute *attr = l->data;
+      if ((int) attr->start_index >= end || (int) attr->end_index <= start)
+        continue;
+      switch (attr->klass->type)
+        {
+        case PANGO_ATTR_UNDERLINE:
+          style.underline = (PangoUnderline) ((PangoAttrInt *) attr)->value;
+          break;
+        case PANGO_ATTR_FOREGROUND:
+          {
+            PangoColor c = ((PangoAttrColor *) attr)->color;
+            style.fg = (GdkRGBA) { c.red / 65535.f, c.green / 65535.f, c.blue / 65535.f, 1.f };
+          }
+          break;
+        case PANGO_ATTR_BACKGROUND:
+          {
+            PangoColor c = ((PangoAttrColor *) attr)->color;
+            style.bg = (GdkRGBA) { c.red / 65535.f, c.green / 65535.f, c.blue / 65535.f, 1.f };
+          }
+          break;
+        case PANGO_ATTR_WEIGHT:
+          style.bold = ((PangoAttrInt *) attr)->value >= PANGO_WEIGHT_BOLD;
+          break;
+        default:
+          break;
+        }
+    }
+  g_slist_free_full (attributes, (GDestroyNotify) pango_attribute_destroy);
+  return style;
+}
+
+/* Lays the preedit out from cursor (x, y); returns the cells and sets the
+ * caret. NULL when there is nothing to draw. */
+static GArray *
+layout_preedit (GtkGhosttyTerminal *self, int cursor_x, int cursor_y, int *caret_x, int *caret_y)
+{
+  GArray *cells;
+  gunichar *cps;
+  glong n = 0;
+  const char *p;
+  int x = cursor_x, y = cursor_y, last_row, shift, columns = (int) self->columns, rows = (int) self->n_rows;
+
+  *caret_x = cursor_x;
+  *caret_y = cursor_y;
+  if (self->preedit == NULL || self->preedit[0] == '\0' || columns <= 0)
+    return NULL;
+  cps = g_utf8_to_ucs4_fast (self->preedit, -1, &n);
+  cells = g_array_new (FALSE, FALSE, sizeof (PreeditCell));
+  p = self->preedit;
+  for (glong i = 0; i < n;)
+    {
+      uint8_t ghostty_width = 1;
+      size_t count = ghostty_unicode_grapheme_width ((const uint32_t *) cps + i, (size_t) (n - i), &ghostty_width);
+      PreeditCell cell;
+      const char *end = p;
+      if (count == 0)
+        count = 1;
+      for (size_t k = 0; k < count; k++)
+        end = g_utf8_next_char (end);
+      /* An isolated combining mark still gets a cell; one column clips wide clusters. */
+      cell.width = CLAMP ((int) ghostty_width, 1, MIN (2, columns));
+      if (x + cell.width > columns)
+        {
+          x = 0;
+          y++;
+        }
+      /* An IM caret inside a cluster snaps to the cluster. */
+      if (self->preedit_cursor >= i && self->preedit_cursor < i + (glong) count)
+        {
+          *caret_x = x;
+          *caret_y = y;
+        }
+      cell.x = x;
+      cell.y = y;
+      cell.byte_start = (int) (p - self->preedit);
+      cell.byte_end = (int) (end - self->preedit);
+      g_array_append_val (cells, cell);
+      x += cell.width;
+      p = end;
+      i += (glong) count;
+    }
+  if (self->preedit_cursor >= n)
+    {
+      *caret_x = MIN (x, columns - 1);
+      *caret_y = y;
+    }
+  g_free (cps);
+
+  last_row = MAX (*caret_y, cells->len > 0 ? g_array_index (cells, PreeditCell, cells->len - 1).y : 0);
+  shift = MIN (*caret_y, MAX (0, last_row - rows + 1));
+  *caret_y -= shift;
+  for (guint i = 0; i < cells->len;)
+    {
+      PreeditCell *cell = &g_array_index (cells, PreeditCell, i);
+      cell->y -= shift;
+      if (cell->y < 0 || cell->y >= rows)
+        g_array_remove_index (cells, i);
+      else
+        i++;
+    }
+  return cells;
+}
+
+static void
+tell_im_location (GtkGhosttyTerminal *self, int x, int y)
+{
+  GdkRectangle rect = { x * self->cell_width, y * self->cell_height, self->cell_width, self->cell_height };
+  if (rect.x == self->im_location.x && rect.y == self->im_location.y
+      && rect.width == self->im_location.width && rect.height == self->im_location.height)
+    return;
+  self->im_location = rect;
+  gtk_im_context_set_cursor_location (self->im, &rect);
+}
+
+/* Draws the composition; FALSE when there is none (the normal cursor shows). */
+static gboolean
+draw_preedit (GtkGhosttyTerminal *self, GtkSnapshot *snapshot, const GdkRGBA *fg, const GdkRGBA *bg)
+{
+  GhosttyRenderStateCursor cursor = GHOSTTY_INIT_SIZED (GhosttyRenderStateCursor);
+  GArray *cells;
+  int caret_x, caret_y, cw = self->cell_width, ch = self->cell_height;
+  GdkRGBA caret_color = *fg;
+
+  if (ghostty_render_state_get (self->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR, &cursor) != GHOSTTY_SUCCESS
+      || !cursor.viewport_has_value)
+    return self->preedit != NULL && self->preedit[0] != '\0';  /* no anchor while scrolled back */
+  tell_im_location (self, cursor.viewport_x, cursor.viewport_y);
+  cells = layout_preedit (self, cursor.viewport_x, cursor.viewport_y, &caret_x, &caret_y);
+  if (cells == NULL)
+    return FALSE;
+  for (guint i = 0; i < cells->len; i++)
+    {
+      PreeditCell *cell = &g_array_index (cells, PreeditCell, i);
+      PreeditStyle style = preedit_style (self, cell->byte_start, cell->byte_end, fg, bg);
+      PangoLayout *layout = pango_layout_new (gtk_widget_get_pango_context (GTK_WIDGET (self)));
+      double left = (double) cell->x * cw, top = (double) cell->y * ch;
+      float scale = 0;
+      append_rect (snapshot, &style.bg, left, top, cell->width * cw, ch);
+      pango_layout_set_font_description (layout, self->fonts[style.bold][0]);
+      pango_layout_set_text (layout, self->preedit + cell->byte_start, cell->byte_end - cell->byte_start);
+      if (cell->width == 2)
+        {
+          int width = 0;
+          pango_layout_get_pixel_size (layout, &width, NULL);
+          scale = (float) (2 * cw) / MAX (1, width);
+        }
+      draw_layout (snapshot, layout, &style.fg, left, top, scale);
+      g_object_unref (layout);
+      if (style.underline != PANGO_UNDERLINE_NONE)
+        append_rect (snapshot, &style.fg, left, top + ch - 2, cell->width * cw, 1);
+      if (cell->x == caret_x && cell->y == caret_y)
+        caret_color = style.fg;
+    }
+  g_array_unref (cells);
+  append_rect (snapshot, &caret_color, (double) caret_x * cw, (double) caret_y * ch, 2, ch);
+  tell_im_location (self, caret_x, caret_y);
+  return TRUE;
+}
+
+static void
+on_preedit_changed (GtkIMContext *im, GtkGhosttyTerminal *self)
+{
+  g_clear_pointer (&self->preedit, g_free);
+  g_clear_pointer (&self->preedit_attrs, pango_attr_list_unref);
+  gtk_im_context_get_preedit_string (im, &self->preedit, &self->preedit_attrs, &self->preedit_cursor);
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
 static void
 draw_cursor (GtkGhosttyTerminal *self, GtkSnapshot *snapshot, const GhosttyRenderStateColors *colors,
              const GdkRGBA *fg_default, const GdkRGBA *bg_default)
@@ -777,7 +983,8 @@ gtk_ghostty_terminal_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
             append_rect (snapshot, &run->fg, left, top + 1, width, 1);
         }
     }
-  draw_cursor (self, snapshot, &colors, &fg, &bg);
+  if (!draw_preedit (self, snapshot, &fg, &bg))
+    draw_cursor (self, snapshot, &colors, &fg, &bg);
 }
 
 /* ---------------------------------------------------------------- input */
@@ -1811,6 +2018,8 @@ gtk_ghostty_terminal_finalize (GObject *object)
   ghostty_terminal_free (self->terminal);
   g_byte_array_unref (self->pending_reply);
   g_free (self->title);
+  g_free (self->preedit);
+  g_clear_pointer (&self->preedit_attrs, pango_attr_list_unref);
   g_clear_pointer (&self->font, pango_font_description_free);
   for (int bold = 0; bold < 2; bold++)
     for (int italic = 0; italic < 2; italic++)
@@ -1943,6 +2152,8 @@ gtk_ghostty_terminal_init (GtkGhosttyTerminal *self)
    * widget's native surface, which does not exist before then. */
   self->im = gtk_im_multicontext_new ();
   g_signal_connect (self->im, "commit", G_CALLBACK (on_im_commit), self);
+  g_signal_connect (self->im, "preedit-changed", G_CALLBACK (on_preedit_changed), self);
+  g_signal_connect (self->im, "preedit-end", G_CALLBACK (on_preedit_changed), self);
 
   keys = gtk_event_controller_key_new ();
   gtk_event_controller_key_set_im_context (GTK_EVENT_CONTROLLER_KEY (keys), self->im);
