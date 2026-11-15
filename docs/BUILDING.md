@@ -24,6 +24,7 @@ pytest.
 |---|---|
 | Debian 13, Ubuntu 24.04 | `meson ninja-build gcc pkgconf libgtk-4-dev gobject-introspection libgirepository1.0-dev python3-gi gir1.2-gtk-4.0` · tests: `python3-pytest xvfb xauth xdotool x11-xserver-utils` |
 | Fedora 44 | `meson ninja-build gcc pkgconf-pkg-config gtk4-devel gobject-introspection-devel python3-gobject` · tests: `python3-pytest xorg-x11-server-Xvfb xauth xdotool xmodmap` |
+| Arch | `meson ninja gcc pkgconf gtk4 gobject-introspection python-gobject` · tests: `python-pytest xorg-server-xvfb xorg-xauth xdotool xorg-xmodmap` |
 
 Then:
 
