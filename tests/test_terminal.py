@@ -385,3 +385,15 @@ def test_the_selection_copies_as_html_with_its_colours():
     html = term.get_selected_html()
     assert "red" in html and "plain" in html and "<" in html
     assert "color" in html.lower()
+
+
+def test_the_line_under_the_pointer_follows_a_scrolled_back_view():
+    term = make(30, 4)
+    scrolled = Gtk.ScrolledWindow()
+    scrolled.set_child(term)
+    term.set_grid_size(30, 4)
+    term.feed_data(b"".join(b"line %d https://e.example/%d\r\n" % (n, n) for n in range(50)))
+    term.scroll_lines(-20)
+    text, _column = term.get_line_at(1, 1)
+    assert text.startswith("line ") and text != "line 49 https://e.example/49"
+    assert text.split()[1] in {str(n) for n in range(25, 35)}

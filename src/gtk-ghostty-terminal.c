@@ -1758,24 +1758,35 @@ set_selection (GtkGhosttyTerminal *self, const GhosttySelection *selection)
 }
 
 /* The selected text as Ghostty copies it: soft wraps joined, trailing blanks trimmed. */
+static char *format_range (GtkGhosttyTerminal *self, const GhosttySelection *selection,
+                           GhosttyFormatterFormat emit, bool unwrap);
+
 static char *
 format_selection (GtkGhosttyTerminal *self, GhosttyFormatterFormat emit)
 {
   GhosttySelection selection = { 0 };
+  if (ghostty_terminal_get (self->terminal, GHOSTTY_TERMINAL_DATA_SELECTION, &selection) != GHOSTTY_SUCCESS)
+    return NULL;
+  return format_range (self, &selection, emit, true);
+}
+
+/* The text of @selection; @unwrap joins soft-wrapped lines. */
+static char *
+format_range (GtkGhosttyTerminal *self, const GhosttySelection *selection, GhosttyFormatterFormat emit, bool unwrap)
+{
+  GhosttySelection range = *selection;
   GhosttyFormatter formatter = NULL;
   bool yes = true;
   uint8_t *ptr = NULL;
   size_t len = 0;
   char *text = NULL;
 
-  if (ghostty_terminal_get (self->terminal, GHOSTTY_TERMINAL_DATA_SELECTION, &selection) != GHOSTTY_SUCCESS)
-    return NULL;
   if (ghostty_formatter_terminal_new (NULL, &formatter, self->terminal) != GHOSTTY_SUCCESS)
     return NULL;
   ghostty_formatter_set (formatter, GHOSTTY_FORMATTER_OPT_EMIT, &emit);
-  ghostty_formatter_set (formatter, GHOSTTY_FORMATTER_OPT_UNWRAP, &yes);
+  ghostty_formatter_set (formatter, GHOSTTY_FORMATTER_OPT_UNWRAP, &unwrap);
   ghostty_formatter_set (formatter, GHOSTTY_FORMATTER_OPT_TRIM, &yes);
-  ghostty_formatter_set (formatter, GHOSTTY_FORMATTER_OPT_SELECTION, &selection);
+  ghostty_formatter_set (formatter, GHOSTTY_FORMATTER_OPT_SELECTION, &range);
   if (ghostty_formatter_format_alloc (formatter, NULL, &ptr, &len) == GHOSTTY_SUCCESS)
     {
       text = ptr != NULL ? g_strndup ((const char *) ptr, len) : g_strdup ("");
@@ -2606,20 +2617,22 @@ gtk_ghostty_terminal_hyperlink_at (GtkGhosttyTerminal *self, double x, double y)
 char *
 gtk_ghostty_terminal_get_line_at (GtkGhosttyTerminal *self, double x, double y, guint *column)
 {
-  GhosttyTerminalScrollbar bar = { 0 };
-  char **lines, *text;
+  GhosttyPoint start = { GHOSTTY_POINT_TAG_VIEWPORT }, end = { GHOSTTY_POINT_TAG_VIEWPORT };
+  GhosttySelection row = { 0 };
   guint cell_column, viewport_row;
-  guint64 row;
+  char *text;
   g_return_val_if_fail (GTK_GHOSTTY_IS_TERMINAL (self), NULL);
   viewport_cell (self, x, y, &cell_column, &viewport_row);
   if (column != NULL)
     *column = cell_column;
-  ghostty_terminal_get (self->terminal, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &bar);
-  row = bar.offset + viewport_row;
-  lines = screen_lines (self);
-  text = row < g_strv_length (lines) ? g_strdup (lines[row]) : g_strdup ("");
-  g_strfreev (lines);
-  return text;
+  /* Only this row: cheap enough to run on pointer motion. */
+  start.value.coordinate.y = end.value.coordinate.y = viewport_row;
+  end.value.coordinate.x = (uint16_t) (self->columns - 1);
+  if (ghostty_terminal_grid_ref (self->terminal, start, &row.start) != GHOSTTY_SUCCESS
+      || ghostty_terminal_grid_ref (self->terminal, end, &row.end) != GHOSTTY_SUCCESS)
+    return g_strdup ("");
+  text = format_range (self, &row, GHOSTTY_FORMATTER_FORMAT_PLAIN, false);
+  return text != NULL ? text : g_strdup ("");
 }
 
 /**
