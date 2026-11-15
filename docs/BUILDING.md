@@ -15,6 +15,11 @@ python3 packaging/windows/build-libghostty-vt.py --target native --prefix ~/.loc
 
 It takes about 6 minutes. No Zig or other tools need to be installed first.
 
+Or skip it on Linux: releases carry `libghostty-vt-<version>-linux-x86_64.tar.gz` and
+`-aarch64.tar.gz`, built for glibc 2.31 and newer. Unpack one anywhere and set
+`PKG_CONFIG_PATH=<dir>/lib/pkgconfig`; its pkg-config file finds the rest relative to itself.
+(`packaging/linux/package-libghostty-vt.sh` builds them.)
+
 ## 2. Linux
 
 Install the build tools and GTK development files. For the tests you also need Xvfb, xdotool and
