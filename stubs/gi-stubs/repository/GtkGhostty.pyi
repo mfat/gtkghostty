@@ -29,6 +29,7 @@ class Pty(GObject.Object):
 
 class Terminal(Gtk.Widget, Gtk.Accessible, Gtk.Buildable, Gtk.ConstraintTarget, Gtk.Scrollable):
     class Props(Gtk.Widget.Props):
+        allow_clipboard_write: bool
         columns: int
         font_desc: Pango.FontDescription
         legacy_keyboard: bool

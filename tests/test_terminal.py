@@ -8,6 +8,8 @@ GI_TYPELIB_PATH, the library on LD_LIBRARY_PATH and a display (Xvfb is fine).
 
 from __future__ import annotations
 
+import base64
+
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -333,3 +335,32 @@ def test_annotations_match_what_the_code_accepts():
     assert term.get_font_desc().to_string() == default
     text, column = term.get_line_at(1, 1)
     assert text == "" and column >= 0
+
+
+def _clipboard_text(clipboard):
+    result = []
+    clipboard.read_text_async(None, lambda c, r: result.append(c.read_text_finish(r)))
+    context = GLib.MainContext.default()
+    deadline = GLib.get_monotonic_time() + 2_000_000
+    while not result and GLib.get_monotonic_time() < deadline:
+        context.iteration(False)
+    return result[0] if result else None
+
+
+def test_programs_can_set_but_never_read_the_clipboard():
+    # OSC 52, as tmux and editors use to copy over SSH.
+    term = make()
+    replies = []
+    term.connect("reply", lambda _t, data: replies.append(data.get_data()))
+    clipboard, primary = term.get_clipboard(), term.get_primary_clipboard()
+    term.feed_data(b"\x1b]52;c;" + base64.b64encode("copié over ssh".encode()) + b"\x1b\\")
+    assert _clipboard_text(clipboard) == "copié over ssh"
+    term.feed_data(b"\x1b]52;p;cHJpbWFyeQ==\x07")
+    assert _clipboard_text(primary) == "primary"
+    term.feed_data(b"\x1b]52;c;?\x1b\\")  # a read request
+    assert all(b"copi" not in reply for reply in replies)
+    assert not any(reply.startswith(b"\x1b]52") and len(reply) > 12 for reply in replies)
+    term.props.allow_clipboard_write = False
+    term.feed_data(b"\x1b]52;c;bm9wZQ==\x1b\\")
+    assert _clipboard_text(clipboard) == "copié over ssh"
+    assert term.get_text() == ""

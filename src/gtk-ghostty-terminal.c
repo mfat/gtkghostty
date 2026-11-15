@@ -90,6 +90,7 @@ struct _GtkGhosttyTerminal
   char *title;
 
   gboolean legacy_keyboard;
+  gboolean allow_clipboard_write;
   gboolean pull_history_on_grow;
   gboolean focused;
 
@@ -136,6 +137,7 @@ enum
   PROP_LEGACY_KEYBOARD,
   PROP_PULL_HISTORY_ON_GROW,
   PROP_FONT_DESC,
+  PROP_ALLOW_CLIPBOARD_WRITE,
   N_PROPS,
   /* GtkScrollable, overridden */
   PROP_HADJUSTMENT = N_PROPS,
@@ -260,6 +262,54 @@ on_xtversion (GhosttyTerminal terminal, void *userdata)
 
 /* Colour scheme query (CSI ? 996 n): what the program draws on is the
  * terminal's background, so its brightness decides. */
+/* OSC 52 (and OSC 1337 Copy, kitty OSC 5522) writes: a program sets the
+ * clipboard, as tmux and editors do to copy across SSH. Plain text only.
+ * Reads are not registered, so programs cannot read the clipboard: they
+ * would have to be answered before this returns, and GTK reads the system
+ * clipboard asynchronously; they would also let a remote host read what
+ * the user copied locally. */
+static void
+on_clipboard_write (GhosttyTerminal terminal, void *userdata, const GhosttyClipboardWrite *write)
+{
+  GtkGhosttyTerminal *self = userdata;
+  GhosttyClipboardWriteReply reply = GHOSTTY_INIT_SIZED (GhosttyClipboardWriteReply);
+  GdkClipboard *clipboard;
+  const GhosttyClipboardContent *text = NULL;
+  (void) terminal;
+
+  reply.result = GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED;
+  if (!self->allow_clipboard_write)
+    goto done;
+  clipboard = write->location == GHOSTTY_CLIPBOARD_LOCATION_STANDARD
+                ? gtk_widget_get_clipboard (GTK_WIDGET (self))
+                : gtk_widget_get_primary_clipboard (GTK_WIDGET (self));
+  if (write->contents_len == 0)
+    {
+      gdk_clipboard_set_content (clipboard, NULL);
+      reply.result = GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS;
+      goto done;
+    }
+  for (size_t i = 0; i < write->contents_len && text == NULL; i++)
+    {
+      const GhosttyString *mime = &write->contents[i].mime;
+      if (mime->len >= 10 && memcmp (mime->ptr, "text/plain", 10) == 0)
+        text = &write->contents[i];
+    }
+  reply.result = GHOSTTY_CLIPBOARD_WRITE_RESULT_UNSUPPORTED;
+  if (text == NULL)
+    goto done;
+  reply.result = GHOSTTY_CLIPBOARD_WRITE_RESULT_INVALID_DATA;
+  if (g_utf8_validate_len ((const char *) text->data.ptr, text->data.len, NULL))
+    {
+      char *value = g_strndup ((const char *) text->data.ptr, text->data.len);
+      gdk_clipboard_set_text (clipboard, value);
+      g_free (value);
+      reply.result = GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS;
+    }
+done:
+  write->reply (write, &reply);
+}
+
 static bool
 on_color_scheme (GhosttyTerminal terminal, void *userdata, GhosttyColorScheme *out)
 {
@@ -2774,6 +2824,7 @@ gtk_ghostty_terminal_get_property (GObject *object, guint prop_id, GValue *value
     case PROP_LEGACY_KEYBOARD: g_value_set_boolean (value, self->legacy_keyboard); break;
     case PROP_PULL_HISTORY_ON_GROW: g_value_set_boolean (value, self->pull_history_on_grow); break;
     case PROP_FONT_DESC: g_value_take_boxed (value, pango_font_description_copy (self->font)); break;
+    case PROP_ALLOW_CLIPBOARD_WRITE: g_value_set_boolean (value, self->allow_clipboard_write); break;
     case PROP_HADJUSTMENT: g_value_set_object (value, self->hadjustment); break;
     case PROP_VADJUSTMENT: g_value_set_object (value, self->vadjustment); break;
     case PROP_HSCROLL_POLICY: g_value_set_enum (value, self->hscroll_policy); break;
@@ -2793,6 +2844,13 @@ gtk_ghostty_terminal_set_property (GObject *object, guint prop_id, const GValue 
       gtk_ghostty_terminal_set_pull_history_on_grow (self, g_value_get_boolean (value));
       break;
     case PROP_FONT_DESC: gtk_ghostty_terminal_set_font_desc (self, g_value_get_boxed (value)); break;
+    case PROP_ALLOW_CLIPBOARD_WRITE:
+      if (self->allow_clipboard_write != g_value_get_boolean (value))
+        {
+          self->allow_clipboard_write = g_value_get_boolean (value);
+          g_object_notify_by_pspec (object, pspec);
+        }
+      break;
     case PROP_HADJUSTMENT: set_adjustment (self, &self->hadjustment, g_value_get_object (value), FALSE); break;
     case PROP_VADJUSTMENT: set_adjustment (self, &self->vadjustment, g_value_get_object (value), TRUE); break;
     case PROP_HSCROLL_POLICY: self->hscroll_policy = g_value_get_enum (value); break;
@@ -2930,6 +2988,16 @@ gtk_ghostty_terminal_class_init (GtkGhosttyTerminalClass *klass)
   properties[PROP_FONT_DESC] =
     g_param_spec_boxed ("font-desc", NULL, NULL, PANGO_TYPE_FONT_DESCRIPTION,
                         G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+  /**
+   * GtkGhosttyTerminal:allow-clipboard-write:
+   *
+   * Whether programs may set the clipboard (OSC 52), as tmux and editors do
+   * to copy over SSH. On by default, as in Ghostty and kitty. Programs can
+   * never read the clipboard.
+   */
+  properties[PROP_ALLOW_CLIPBOARD_WRITE] =
+    g_param_spec_boolean ("allow-clipboard-write", NULL, NULL, TRUE,
+                          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
   g_object_class_install_properties (object_class, N_PROPS, properties);
   g_object_class_override_property (object_class, PROP_HADJUSTMENT, "hadjustment");
   g_object_class_override_property (object_class, PROP_VADJUSTMENT, "vadjustment");
@@ -3010,6 +3078,7 @@ gtk_ghostty_terminal_init (GtkGhosttyTerminal *self)
   self->n_rows = DEFAULT_ROWS;
   self->pull_history_on_grow = TRUE;
   self->font_scale = 1.0;
+  self->allow_clipboard_write = TRUE;
   self->held_keys = g_array_new (FALSE, FALSE, sizeof (guint));
   self->search_row = self->search_column = -1;
   self->pending_reply = g_byte_array_new ();
@@ -3049,6 +3118,7 @@ gtk_ghostty_terminal_init (GtkGhosttyTerminal *self)
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_SIZE, (const void *) on_size);
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_XTVERSION, (const void *) on_xtversion);
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_COLOR_SCHEME, (const void *) on_color_scheme);
+  ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE, (const void *) on_clipboard_write);
   /* The byte limit defaults to one page (~10 KB): let the line limit decide. */
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &max_bytes);
   ghostty_terminal_set (self->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &max_lines);
