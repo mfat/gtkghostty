@@ -125,3 +125,10 @@ def test_a_wheel_notch_scrolls_the_set_number_of_lines():
         moved.append(before - adjustment.get_value())
     window.destroy()
     assert moved == [3, 7], moved
+
+
+def test_ctrl_alt_space_is_escape_nul(focused_terminal):
+    # Midnight Commander and Emacs bind it; it is not an AltGr character.
+    term, sent = focused_terminal
+    _keys("ctrl+space", "ctrl+alt+space")
+    assert b"".join(sent) == b"\x00\x1b\x00"

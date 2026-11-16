@@ -1403,11 +1403,15 @@ encode_key (GtkGhosttyTerminal *self, GtkEventController *controller, guint keyv
     text = gdk_keyval_to_unicode (keyval);
   if (text < 0x20 || text == 0x7f)
     text = 0;  /* control characters are the encoder's job */
+#ifdef G_OS_WIN32
   /* Windows reports AltGr as Ctrl+Alt: AltGr+Q on a German layout is "@",
-   * which must reach the program as text, not as Ctrl+Alt+@. */
-  if ((mods & GHOSTTY_MODS_CTRL) && (mods & GHOSTTY_MODS_ALT) && text != 0
+   * which must reach the program as text, not as Ctrl+Alt+@. Elsewhere AltGr
+   * is its own level (ISO_Level3_Shift), and Ctrl+Alt is meant as such.
+   * Space is never an AltGr character: Ctrl+Alt+Space stays ESC NUL. */
+  if ((mods & GHOSTTY_MODS_CTRL) && (mods & GHOSTTY_MODS_ALT) && text != 0 && text != ' '
       && !g_unichar_isalpha (text) && g_unichar_isprint (text))
     mods &= ~(GHOSTTY_MODS_CTRL | GHOSTTY_MODS_ALT);
+#endif
   if (key == GHOSTTY_KEY_UNIDENTIFIED && text == 0)
     return FALSE;
   if (text != 0)
