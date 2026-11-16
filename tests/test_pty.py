@@ -74,6 +74,15 @@ def test_the_environment_reaches_the_program():
 
 
 @pytest.mark.skipif(WINDOWS, reason="stty is POSIX")
+def test_the_starting_size_reaches_the_program():
+    # macOS resets a terminal's size on its first open: lost unless the
+    # terminal side is opened before the size is set.
+    term, pty, exits = attached(["/bin/sh", "-c", "stty size"], 60, 10)
+    assert pump_until(lambda: exits)
+    assert "10 60" in term.get_text()
+
+
+@pytest.mark.skipif(WINDOWS, reason="stty is POSIX")
 def test_resize_reaches_the_program():
     term, pty, exits = attached(["/bin/sh", "-c", "sleep 0.3; stty size"], 60, 10)
     term.set_grid_size(77, 13)
