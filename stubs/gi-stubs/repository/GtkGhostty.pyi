@@ -9,6 +9,12 @@ class CursorShape(GObject.GEnum):
     IBEAM: CursorShape
     UNDERLINE: CursorShape
 
+class OptionAsAlt(GObject.GEnum):
+    NEVER: OptionAsAlt
+    ALWAYS: OptionAsAlt
+    LEFT: OptionAsAlt
+    RIGHT: OptionAsAlt
+
 class Pty(GObject.Object):
     def __init__(self, **properties: typing.Any) -> None: ...
     @staticmethod
@@ -35,6 +41,7 @@ class Terminal(Gtk.Widget, Gtk.Accessible, Gtk.Buildable, Gtk.ConstraintTarget, 
         encoding: typing.Optional[str]
         font_desc: Pango.FontDescription
         legacy_keyboard: bool
+        option_as_alt: OptionAsAlt
         pull_history_on_grow: bool
         rows: int
         title: typing.Optional[str]
@@ -56,6 +63,7 @@ class Terminal(Gtk.Widget, Gtk.Accessible, Gtk.Buildable, Gtk.ConstraintTarget, 
     def get_font_scale(self) -> float: ...
     def get_legacy_keyboard(self) -> bool: ...
     def get_line_at(self, x: float, y: float) -> typing.Tuple[str, int]: """For finding plain-text links: the text of the row under (x, y)."""
+    def get_option_as_alt(self) -> OptionAsAlt: ...
     def get_pull_history_on_grow(self) -> bool: ...
     def get_rows(self) -> int: ...
     def get_selected_html(self) -> typing.Optional[str]: """The selection as HTML that keeps its colours and styles (what copy_clipboard() offers besides plain text)."""
@@ -80,6 +88,7 @@ class Terminal(Gtk.Widget, Gtk.Accessible, Gtk.Buildable, Gtk.ConstraintTarget, 
     def set_font_scale(self, scale: float) -> None: ...
     def set_grid_size(self, columns: int, rows: int) -> None: """Resizes the terminal grid. A widget that gets allocated sets its own size from the allocation; this is for terminals that are not shown (tests, headless use) or before the first allocation."""
     def set_legacy_keyboard(self, legacy: bool) -> None: """Set this when the byte stream goes through Windows ConPTY: it forwards a program's kitty keyboard request but cannot parse kitty-encoded keys."""
+    def set_option_as_alt(self, option_as_alt: OptionAsAlt) -> None: """With %GTK_GHOSTTY_OPTION_AS_ALT_NEVER (the default, as in Terminal.app) Option types the character the keyboard layout gives it ("|" on Option+Shift+L with a French layout, "@" on Option+G with a German one). With %GTK_GHOSTTY_OPTION_AS_ALT_ALWAYS it acts as Alt (Meta) for shells and editors: Option+B sends ESC b. LEFT and RIGHT make only that Option key Alt and leave the other for characters. Only macOS has an Option key; elsewhere this has no effect."""
     def set_pull_history_on_grow(self, pull: bool) -> None: """Turn this off when the program side keeps its own screen without scrollback and repaints it after a resize (Windows ConPTY)."""
     def set_scrollback_lines(self, lines: int) -> None: ...
     def set_wheel_scroll_lines(self, lines: int) -> None: ...

@@ -139,7 +139,7 @@ jobs:
           # Homebrew's Python is externally managed: pytest goes in a venv
           # that still sees Homebrew's PyGObject.
           python3 -m venv --system-site-packages _venv
-          _venv/bin/pip install --quiet pytest
+          _venv/bin/pip install --quiet pytest pyobjc-framework-Quartz pyobjc-framework-Cocoa
           PATH="$PWD/_venv/bin:$PATH" tests/run.sh _build -rs
 
   windows-gvsbuild:
