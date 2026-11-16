@@ -397,3 +397,33 @@ def test_the_line_under_the_pointer_follows_a_scrolled_back_view():
     text, _column = term.get_line_at(1, 1)
     assert text.startswith("line ") and text != "line 49 https://e.example/49"
     assert text.split()[1] in {str(n) for n in range(25, 35)}
+
+
+def test_legacy_encodings_are_converted_both_ways():
+    term = make(30, 4)
+    sent = []
+    term.connect("input", lambda _t, data: sent.append(data.get_data()))
+    term.connect("reply", lambda _t, data: sent.append(data.get_data()))
+    assert term.get_encoding() is None
+    assert not term.set_encoding("NOT-AN-ENCODING") and term.get_encoding() is None
+
+    assert term.set_encoding("ISO-8859-1") and term.props.encoding == "ISO-8859-1"
+    term.feed_data("café \x1b[1mbold\x1b[0m".encode("latin-1"))
+    assert term.get_text().splitlines()[0] == "café bold"
+    term.paste_text("né")
+    assert sent[-1].endswith("né".encode("latin-1")) and b"\xc3" not in sent[-1]
+    term.paste_text("€")  # not in Latin-1: a placeholder, never broken bytes
+    assert sent[-1].endswith(b"?")
+
+    term.feed_data(b"\x1b[2J\x1b[H")
+    assert term.set_encoding("Shift_JIS")
+    data = "日本語".encode("shift_jis")
+    term.feed_data(data[:3])  # a character split across two reads
+    term.feed_data(data[3:])
+    assert term.get_text().splitlines()[0] == "日本語"
+    term.feed_data(b"\x1b[6n")  # replies are ASCII and pass unchanged
+    assert sent[-1] == b"\x1b[1;7R"
+
+    assert term.set_encoding("UTF-8") and term.get_encoding() is None
+    term.feed_data("\r\nütf".encode())
+    assert term.get_text().splitlines()[1] == "ütf"

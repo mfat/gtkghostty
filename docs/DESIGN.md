@@ -83,6 +83,7 @@ UTF-8 and draws no images yet.
   tell scrolling from new output. Kwi's `TerminalAccessible` is the design reference.
 - Kitty graphics, with file, temporary-file and shared-memory media off by default (over SSH
   they would let a remote program read local files).
-- Cursor blinking is recorded but not animated; search selects one hit and does not highlight
-  all of them.
+- Search selects one hit and does not highlight all of them.
+- `encoding` covers ASCII-compatible legacy encodings (Latin-1, Shift_JIS, GBK and the like)
+  by converting at the edges; libghostty-vt itself only reads UTF-8, so UTF-16 is out.
 - Windows on real hardware with a GPU (tested so far on VMs, which use GTK's Cairo renderer).

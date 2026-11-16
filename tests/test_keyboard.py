@@ -99,3 +99,29 @@ def test_a_composition_is_text_even_under_kitty(focused_terminal):
     _keys("dead_acute", "e")
     presses = [chunk for chunk in sent if not chunk.endswith(b":3u")]
     assert "é".encode() in b"".join(presses), sent
+
+
+def test_a_wheel_notch_scrolls_the_set_number_of_lines():
+    term = GtkGhostty.Terminal()
+    scrolled = Gtk.ScrolledWindow()
+    scrolled.set_child(term)
+    window = Gtk.Window(title="gtkghostty-wheel-test")
+    window.set_default_size(400, 200)
+    window.set_child(scrolled)
+    window.present()
+    _pump(1.0)
+    term.feed_data(b"".join(b"line%d\r\n" % n for n in range(200)))
+    _pump(0.3)
+    adjustment = scrolled.get_vadjustment()
+    subprocess.run(["xdotool", "search", "--name", "gtkghostty-wheel-test", "windowfocus", "--sync"], check=False)
+    subprocess.run(["xdotool", "search", "--name", "gtkghostty-wheel-test",
+                    "mousemove", "--window", "%1", "100", "80"], check=True)
+    moved = []
+    for lines in (3, 7):
+        term.props.wheel_scroll_lines = lines
+        before = adjustment.get_value()
+        subprocess.run(["xdotool", "click", "4"], check=True)  # one notch up
+        _pump(0.5)
+        moved.append(before - adjustment.get_value())
+    window.destroy()
+    assert moved == [3, 7], moved

@@ -32,7 +32,7 @@ SCALARS = {
 }
 #: String properties that are NULL until set. g-ir-scanner cannot record
 #: nullability for properties, so it is listed here.
-NULLABLE_PROPERTIES = {"title", "current-directory-uri"}
+NULLABLE_PROPERTIES = {"title", "current-directory-uri", "encoding"}
 KEYWORDS = {"def", "class", "from", "in", "is", "lambda", "global", "pass", "return"}
 
 

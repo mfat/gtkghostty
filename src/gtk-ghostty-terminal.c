@@ -16,6 +16,7 @@
 
 #include <ghostty/vt.h>
 #include <stdint.h>
+#include <errno.h>
 #include <string.h>
 
 #ifdef G_OS_WIN32
@@ -95,6 +96,10 @@ struct _GtkGhosttyTerminal
 
   gboolean legacy_keyboard;
   gboolean allow_clipboard_write;
+  guint wheel_lines;              /* rows per wheel notch */
+  char *encoding;                 /* NULL: UTF-8 */
+  GIConv decoder, encoder;        /* encoding -> UTF-8, UTF-8 -> encoding */
+  GByteArray *undecoded;          /* an incomplete character from the last feed */
   gboolean pull_history_on_grow;
   gboolean focused;
 
@@ -143,6 +148,8 @@ enum
   PROP_FONT_DESC,
   PROP_ALLOW_CLIPBOARD_WRITE,
   PROP_CURRENT_DIRECTORY_URI,
+  PROP_ENCODING,
+  PROP_WHEEL_SCROLL_LINES,
   N_PROPS,
   /* GtkScrollable, overridden */
   PROP_HADJUSTMENT = N_PROPS,
@@ -163,6 +170,9 @@ enum
 };
 
 static GParamSpec *properties[N_PROPS];
+
+static GByteArray *decode_output (GtkGhosttyTerminal *self, const guint8 *data, gsize length);
+static GByteArray *encode_input (GtkGhosttyTerminal *self, const guint8 *data, gsize length);
 static guint signals[N_SIGNALS];
 
 G_DEFINE_ENUM_TYPE (GtkGhosttyCursorShape, gtk_ghostty_cursor_shape,
@@ -336,7 +346,9 @@ flush_effects (GtkGhosttyTerminal *self)
 {
   if (self->pending_reply->len > 0)
     {
-      GBytes *reply = g_bytes_new (self->pending_reply->data, self->pending_reply->len);
+      GBytes *reply = self->encoder != (GIConv) -1
+        ? g_byte_array_free_to_bytes (encode_input (self, self->pending_reply->data, self->pending_reply->len))
+        : g_bytes_new (self->pending_reply->data, self->pending_reply->len);
       g_byte_array_set_size (self->pending_reply, 0);
       g_signal_emit (self, signals[SIGNAL_REPLY], 0, reply);
       g_bytes_unref (reply);
@@ -375,7 +387,10 @@ emit_input (GtkGhosttyTerminal *self, const guint8 *data, gsize len)
   GBytes *bytes;
   if (len == 0)
     return;
-  bytes = g_bytes_new (data, len);
+  if (self->encoder != (GIConv) -1)
+    bytes = g_byte_array_free_to_bytes (encode_input (self, data, len));
+  else
+    bytes = g_bytes_new (data, len);
   g_signal_emit (self, signals[SIGNAL_INPUT], 0, bytes);
   g_bytes_unref (bytes);
 }
@@ -2047,7 +2062,7 @@ on_scroll (GtkEventControllerScroll *controller, double dx, double dy, GtkGhostt
 {
   GdkModifierType state = gtk_event_controller_get_current_event_state (GTK_EVENT_CONTROLLER (controller));
   GdkScrollUnit unit = gtk_event_controller_scroll_get_unit (controller);
-  double rows = unit == GDK_SCROLL_UNIT_WHEEL ? dy * 3 : dy / MAX (1, self->cell_height);
+  double rows = unit == GDK_SCROLL_UNIT_WHEEL ? dy * self->wheel_lines : dy / MAX (1, self->cell_height);
   int steps;
 
   self->scroll_remainder += rows;
@@ -2109,7 +2124,14 @@ gtk_ghostty_terminal_feed_data (GtkGhosttyTerminal *self, const guint8 *data, gs
   g_return_if_fail (GTK_GHOSTTY_IS_TERMINAL (self));
   if (length == 0)
     return;
-  ghostty_terminal_vt_write (self->terminal, data, length);
+  if (self->decoder != (GIConv) -1)
+    {
+      GByteArray *utf8 = decode_output (self, data, length);
+      ghostty_terminal_vt_write (self->terminal, utf8->data, utf8->len);
+      g_byte_array_unref (utf8);
+    }
+  else
+    ghostty_terminal_vt_write (self->terminal, data, length);
   apply_pending_cursor_reset (self);
   if (self->blink_source != 0 || self->blink_off)
     restart_blink (self);
@@ -2635,6 +2657,181 @@ gtk_ghostty_terminal_get_line_at (GtkGhosttyTerminal *self, double x, double y, 
   return text != NULL ? text : g_strdup ("");
 }
 
+/* ------------------------------------------------------------ encoding */
+
+/* libghostty-vt reads and writes UTF-8. With another encoding set, output is
+ * converted to UTF-8 on the way in and everything the terminal sends on the
+ * way out. The legacy encodings this is for keep ASCII where it is, so
+ * escape sequences pass unchanged. */
+
+static void
+append_converted (GIConv cd, const char *data, gsize length, GByteArray *out, gboolean to_utf8,
+                  GByteArray *incomplete)
+{
+  char buffer[4096];
+  char *in = (char *) data;
+  gsize in_left = length;
+  while (in_left > 0)
+    {
+      char *outp = buffer;
+      gsize out_left = sizeof buffer;
+      gsize result = g_iconv (cd, &in, &in_left, &outp, &out_left);
+      int error = errno;
+      g_byte_array_append (out, (const guint8 *) buffer, sizeof buffer - out_left);
+      if (result != (gsize) -1)
+        break;
+      if (error == E2BIG)
+        continue;
+      if (error == EINVAL && incomplete != NULL)
+        {
+          /* A character split across reads: finish it next time. */
+          g_byte_array_append (incomplete, (const guint8 *) in, in_left);
+          break;
+        }
+      /* Invalid or unrepresentable: one replacement, then resynchronise. */
+      if (to_utf8)
+        g_byte_array_append (out, (const guint8 *) "\xEF\xBF\xBD", 3);
+      else
+        g_byte_array_append (out, (const guint8 *) "?", 1);
+      if (to_utf8 || error == EINVAL)
+        {
+          in++;
+          in_left--;
+        }
+      else
+        {
+          const char *next = g_utf8_find_next_char (in, in + in_left);
+          gsize skip = next != NULL ? (gsize) (next - in) : in_left;
+          in += skip;
+          in_left -= skip;
+        }
+      g_iconv (cd, NULL, NULL, NULL, NULL);
+    }
+}
+
+/* Program output in the set encoding -> UTF-8 for libghostty-vt. */
+static GByteArray *
+decode_output (GtkGhosttyTerminal *self, const guint8 *data, gsize length)
+{
+  GByteArray *input = g_byte_array_new ();
+  GByteArray *out = g_byte_array_sized_new (length + 16);
+  g_byte_array_append (input, self->undecoded->data, self->undecoded->len);
+  g_byte_array_append (input, data, length);
+  g_byte_array_set_size (self->undecoded, 0);
+  append_converted (self->decoder, (const char *) input->data, input->len, out, TRUE, self->undecoded);
+  g_byte_array_unref (input);
+  return out;
+}
+
+/* What the terminal sends, UTF-8 -> the set encoding. Bytes that are not
+ * UTF-8 text (legacy X10 mouse reports) go through as they are. */
+static GByteArray *
+encode_input (GtkGhosttyTerminal *self, const guint8 *data, gsize length)
+{
+  GByteArray *out = g_byte_array_sized_new (length);
+  const char *p = (const char *) data, *end = p + length;
+  while (p < end)
+    {
+      const char *valid_end = NULL;
+      g_utf8_validate_len (p, (gsize) (end - p), &valid_end);
+      if (valid_end > p)
+        {
+          append_converted (self->encoder, p, (gsize) (valid_end - p), out, FALSE, NULL);
+          p = valid_end;
+        }
+      if (p < end)
+        {
+          g_byte_array_append (out, (const guint8 *) p, 1);
+          p++;
+        }
+    }
+  return out;
+}
+
+/**
+ * gtk_ghostty_terminal_set_encoding:
+ * @self: the terminal
+ * @encoding: (nullable): the program's character encoding (an iconv name
+ *   such as "ISO-8859-1", "Shift_JIS" or "GBK"), or %NULL for UTF-8
+ *
+ * For programs and hosts that do not use UTF-8. Encodings that keep ASCII
+ * as it is work; UTF-16 and other non-ASCII-compatible ones do not.
+ *
+ * Returns: %FALSE (and the encoding unchanged) when it is not known
+ */
+gboolean
+gtk_ghostty_terminal_set_encoding (GtkGhosttyTerminal *self, const char *encoding)
+{
+  GIConv decoder = (GIConv) -1, encoder = (GIConv) -1;
+  g_return_val_if_fail (GTK_GHOSTTY_IS_TERMINAL (self), FALSE);
+  if (encoding != NULL && (encoding[0] == '\0' || g_ascii_strcasecmp (encoding, "UTF-8") == 0
+                           || g_ascii_strcasecmp (encoding, "UTF8") == 0))
+    encoding = NULL;
+  if (g_strcmp0 (encoding, self->encoding) == 0)
+    return TRUE;
+  if (encoding != NULL)
+    {
+      decoder = g_iconv_open ("UTF-8", encoding);
+      encoder = g_iconv_open (encoding, "UTF-8");
+      if (decoder == (GIConv) -1 || encoder == (GIConv) -1)
+        {
+          if (decoder != (GIConv) -1)
+            g_iconv_close (decoder);
+          if (encoder != (GIConv) -1)
+            g_iconv_close (encoder);
+          return FALSE;
+        }
+    }
+  if (self->decoder != (GIConv) -1)
+    g_iconv_close (self->decoder);
+  if (self->encoder != (GIConv) -1)
+    g_iconv_close (self->encoder);
+  self->decoder = decoder;
+  self->encoder = encoder;
+  g_byte_array_set_size (self->undecoded, 0);
+  g_free (self->encoding);
+  self->encoding = g_strdup (encoding);
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_ENCODING]);
+  return TRUE;
+}
+
+/**
+ * gtk_ghostty_terminal_get_encoding:
+ * @self: the terminal
+ *
+ * Returns: (nullable): the encoding set with
+ *   gtk_ghostty_terminal_set_encoding(), %NULL for UTF-8
+ */
+const char *
+gtk_ghostty_terminal_get_encoding (GtkGhosttyTerminal *self)
+{
+  g_return_val_if_fail (GTK_GHOSTTY_IS_TERMINAL (self), NULL);
+  return self->encoding;
+}
+
+/**
+ * gtk_ghostty_terminal_set_wheel_scroll_lines:
+ * @self: the terminal
+ * @lines: history rows a mouse-wheel notch scrolls (1-20)
+ */
+void
+gtk_ghostty_terminal_set_wheel_scroll_lines (GtkGhosttyTerminal *self, guint lines)
+{
+  g_return_if_fail (GTK_GHOSTTY_IS_TERMINAL (self));
+  lines = CLAMP (lines, 1, 20);
+  if (lines == self->wheel_lines)
+    return;
+  self->wheel_lines = lines;
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_WHEEL_SCROLL_LINES]);
+}
+
+guint
+gtk_ghostty_terminal_get_wheel_scroll_lines (GtkGhosttyTerminal *self)
+{
+  g_return_val_if_fail (GTK_GHOSTTY_IS_TERMINAL (self), 3);
+  return self->wheel_lines;
+}
+
 /**
  * gtk_ghostty_terminal_get_selected_html:
  * @self: the terminal
@@ -2987,6 +3184,8 @@ gtk_ghostty_terminal_get_property (GObject *object, guint prop_id, GValue *value
     case PROP_FONT_DESC: g_value_take_boxed (value, pango_font_description_copy (self->font)); break;
     case PROP_ALLOW_CLIPBOARD_WRITE: g_value_set_boolean (value, self->allow_clipboard_write); break;
     case PROP_CURRENT_DIRECTORY_URI: g_value_set_string (value, self->current_directory_uri); break;
+    case PROP_ENCODING: g_value_set_string (value, self->encoding); break;
+    case PROP_WHEEL_SCROLL_LINES: g_value_set_uint (value, self->wheel_lines); break;
     case PROP_HADJUSTMENT: g_value_set_object (value, self->hadjustment); break;
     case PROP_VADJUSTMENT: g_value_set_object (value, self->vadjustment); break;
     case PROP_HSCROLL_POLICY: g_value_set_enum (value, self->hscroll_policy); break;
@@ -3006,6 +3205,8 @@ gtk_ghostty_terminal_set_property (GObject *object, guint prop_id, const GValue 
       gtk_ghostty_terminal_set_pull_history_on_grow (self, g_value_get_boolean (value));
       break;
     case PROP_FONT_DESC: gtk_ghostty_terminal_set_font_desc (self, g_value_get_boxed (value)); break;
+    case PROP_ENCODING: gtk_ghostty_terminal_set_encoding (self, g_value_get_string (value)); break;
+    case PROP_WHEEL_SCROLL_LINES: gtk_ghostty_terminal_set_wheel_scroll_lines (self, g_value_get_uint (value)); break;
     case PROP_ALLOW_CLIPBOARD_WRITE:
       if (self->allow_clipboard_write != g_value_get_boolean (value))
         {
@@ -3077,6 +3278,12 @@ gtk_ghostty_terminal_finalize (GObject *object)
   g_clear_pointer (&self->plain_search, ghostty_search_free);
   g_clear_handle_id (&self->blink_source, g_source_remove);
   g_free (self->current_directory_uri);
+  if (self->decoder != (GIConv) -1)
+    g_iconv_close (self->decoder);
+  if (self->encoder != (GIConv) -1)
+    g_iconv_close (self->encoder);
+  g_byte_array_unref (self->undecoded);
+  g_free (self->encoding);
   g_array_unref (self->held_keys);
   g_clear_pointer (&self->font, pango_font_description_free);
   for (int bold = 0; bold < 2; bold++)
@@ -3171,6 +3378,23 @@ gtk_ghostty_terminal_class_init (GtkGhosttyTerminalClass *klass)
   properties[PROP_CURRENT_DIRECTORY_URI] =
     g_param_spec_string ("current-directory-uri", NULL, NULL, NULL,
                          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+  /**
+   * GtkGhosttyTerminal:encoding:
+   *
+   * The program's character encoding (see
+   * gtk_ghostty_terminal_set_encoding()), %NULL for UTF-8.
+   */
+  properties[PROP_ENCODING] =
+    g_param_spec_string ("encoding", NULL, NULL, NULL,
+                         G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+  /**
+   * GtkGhosttyTerminal:wheel-scroll-lines:
+   *
+   * History rows a mouse-wheel notch scrolls.
+   */
+  properties[PROP_WHEEL_SCROLL_LINES] =
+    g_param_spec_uint ("wheel-scroll-lines", NULL, NULL, 1, 20, 3,
+                       G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
   g_object_class_install_properties (object_class, N_PROPS, properties);
   g_object_class_override_property (object_class, PROP_HADJUSTMENT, "hadjustment");
   g_object_class_override_property (object_class, PROP_VADJUSTMENT, "vadjustment");
@@ -3252,6 +3476,9 @@ gtk_ghostty_terminal_init (GtkGhosttyTerminal *self)
   self->pull_history_on_grow = TRUE;
   self->font_scale = 1.0;
   self->allow_clipboard_write = TRUE;
+  self->wheel_lines = 3;
+  self->decoder = self->encoder = (GIConv) -1;
+  self->undecoded = g_byte_array_new ();
   self->held_keys = g_array_new (FALSE, FALSE, sizeof (guint));
   self->search_row = self->search_column = -1;
   self->pending_reply = g_byte_array_new ();

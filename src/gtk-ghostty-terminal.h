@@ -105,6 +105,16 @@ double      gtk_ghostty_terminal_get_font_scale     (GtkGhosttyTerminal         
 GTK_GHOSTTY_API
 char       *gtk_ghostty_terminal_get_selected_html  (GtkGhosttyTerminal         *self);
 GTK_GHOSTTY_API
+gboolean    gtk_ghostty_terminal_set_encoding       (GtkGhosttyTerminal         *self,
+                                                     const char                 *encoding);
+GTK_GHOSTTY_API
+const char *gtk_ghostty_terminal_get_encoding       (GtkGhosttyTerminal         *self);
+GTK_GHOSTTY_API
+void        gtk_ghostty_terminal_set_wheel_scroll_lines (GtkGhosttyTerminal     *self,
+                                                         guint                   lines);
+GTK_GHOSTTY_API
+guint       gtk_ghostty_terminal_get_wheel_scroll_lines (GtkGhosttyTerminal     *self);
+GTK_GHOSTTY_API
 const char *gtk_ghostty_terminal_get_current_directory_uri (GtkGhosttyTerminal  *self);
 
 GTK_GHOSTTY_API
