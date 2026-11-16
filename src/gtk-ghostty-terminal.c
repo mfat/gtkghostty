@@ -2756,6 +2756,7 @@ encode_input (GtkGhosttyTerminal *self, const guint8 *data, gsize length)
  *
  * For programs and hosts that do not use UTF-8. Encodings that keep ASCII
  * as it is work; UTF-16 and other non-ASCII-compatible ones do not.
+ * "Shift_JIS" means Windows' CP932, which keeps the backslash.
  *
  * Returns: %FALSE (and the encoding unchanged) when it is not known
  */
@@ -2771,8 +2772,15 @@ gtk_ghostty_terminal_set_encoding (GtkGhosttyTerminal *self, const char *encodin
     return TRUE;
   if (encoding != NULL)
     {
-      decoder = g_iconv_open ("UTF-8", encoding);
-      encoder = g_iconv_open (encoding, "UTF-8");
+      /* iconv's SHIFT_JIS is JIS X 0201 Roman: 0x5C is a yen sign and 0x7E an
+       * overline, which breaks ESC \ and every backslash typed. Shift_JIS as
+       * used in practice is Windows' CP932, which keeps ASCII. */
+      const char *iconv_name = encoding;
+      if (g_ascii_strcasecmp (encoding, "Shift_JIS") == 0 || g_ascii_strcasecmp (encoding, "SHIFT-JIS") == 0
+          || g_ascii_strcasecmp (encoding, "SJIS") == 0)
+        iconv_name = "CP932";
+      decoder = g_iconv_open ("UTF-8", iconv_name);
+      encoder = g_iconv_open (iconv_name, "UTF-8");
       if (decoder == (GIConv) -1 || encoder == (GIConv) -1)
         {
           if (decoder != (GIConv) -1)

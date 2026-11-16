@@ -423,6 +423,11 @@ def test_legacy_encodings_are_converted_both_ways():
     assert term.get_text().splitlines()[0] == "日本語"
     term.feed_data(b"\x1b[6n")  # replies are ASCII and pass unchanged
     assert sent[-1] == b"\x1b[1;7R"
+    # Backslash stays a backslash (not iconv's JIS-Roman yen), so ST works.
+    term.feed_data(b"\x1b]2;C:\\dir\x1b\\ ~")
+    assert term.get_title() == "C:\\dir" and term.get_text().splitlines()[0].endswith(" ~")
+    term.paste_text("\\")
+    assert sent[-1].endswith(b"\\")
 
     assert term.set_encoding("UTF-8") and term.get_encoding() is None
     term.feed_data("\r\nütf".encode())
